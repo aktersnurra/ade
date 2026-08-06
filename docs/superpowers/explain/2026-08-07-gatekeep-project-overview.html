@@ -1,0 +1,380 @@
+<!doctype html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="generator" content="pandoc" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=yes"
+    />
+    <title>2026-08-07-gatekeep-project-overview</title>
+    <style>
+      code {
+        white-space: pre-wrap;
+      }
+      span.smallcaps {
+        font-variant: small-caps;
+      }
+      div.columns {
+        display: flex;
+        gap: min(4vw, 1.5em);
+      }
+      div.column {
+        flex: auto;
+        overflow-x: auto;
+      }
+      div.hanging-indent {
+        margin-left: 1.5em;
+        text-indent: -1.5em;
+      }
+      /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+      ul.task-list[class] {
+        list-style: none;
+      }
+      ul.task-list li input[type="checkbox"] {
+        font-size: inherit;
+        width: 0.8em;
+        margin: 0 0.8em 0.2em -1.6em;
+        vertical-align: middle;
+      }
+      .display.math {
+        display: block;
+        text-align: center;
+        margin: 0.5rem auto;
+      }
+    </style>
+    <link
+      rel="stylesheet"
+      href="/Users/aktersnurra/.pi/agent/skills/explain/assets/style.css"
+    />
+  </head>
+  <body>
+    <p>
+      <strong>Superseded:</strong> This historical overview predates the
+      Microsandbox validation and ADE naming decision. See
+      <code>docs/superpowers/specs/2026-08-14-ade-design.md</code> for the
+      current design.
+    </p>
+    <header id="title-block-header">
+      <h1 class="title">2026-08-07-gatekeep-project-overview</h1>
+    </header>
+    <section id="gatekeep-project-overview" class="level1">
+      <h1>Gatekeep project overview</h1>
+      <section id="summary" class="level2">
+        <h2>Summary</h2>
+        <p>
+          Gatekeep is a proposed
+          <strong
+            >local, cross-platform control plane for autonomous coding
+            agents</strong
+          >. It launches an isolated virtual-machine workbench where multiple
+          coding agents can work, while the host controls access to files,
+          credentials, network egress, containers, and external actions.
+        </p>
+        <p>
+          Its central purpose is not to constrain what agents can do inside
+          already-authorized source trees. Instead, it makes access to the host
+          and external systems explicit, scoped, auditable, time-bounded, and
+          separated by trust zone.
+        </p>
+        <p>
+          This repository currently contains a design draft rather than an
+          implementation.
+        </p>
+      </section>
+      <section id="the-problem-it-solves" class="level2">
+        <h2>The problem it solves</h2>
+        <p>
+          Coding agents commonly need a capable environment: a workspace,
+          package tools, a terminal, containers, browser access, and
+          occasionally credentials for services or cloud infrastructure. Giving
+          an agent unrestricted access to the host machine makes those
+          capabilities inseparable from sensitive user state such as the home
+          directory, browser profile, SSH agent, 1Password session, Docker
+          socket, cloud credentials, and unrelated project files.
+        </p>
+        <p>Gatekeep proposes a different boundary:</p>
+        <pre class="text"><code>Host control plane
+  ├─ validates policy and zone configuration
+  ├─ starts/stops isolated VM workbenches
+  ├─ checkpoints explicitly writable host roots
+  ├─ brokers narrowly scoped external capabilities
+  └─ records approvals, denials, and receipts
+
+Guest workbench VM
+  ├─ runs agents and guest-local tmux
+  ├─ contains guest-local tools and containers
+  ├─ mounts only declared host workspace roots
+  └─ requests external effects through a private channel</code></pre>
+        <p>
+          The guest must not get a generic host shell, host Docker access,
+          arbitrary authenticated HTTP proxying, <code>op</code>, SSH agent
+          forwarding, Keychain access, or host-global Pi state.
+        </p>
+      </section>
+      <section id="workbenches-and-zones" class="level2">
+        <h2>Workbenches and zones</h2>
+        <p>
+          A <strong>workbench</strong> is one finite-lived VM environment. It
+          includes a zone identity, lease, VM, guest-local tmux server, declared
+          workspace mounts, selected Pi profile, policy digest, and audit
+          stream.
+        </p>
+        <p>
+          A <strong>zone</strong> is an authority boundary, rather than merely a
+          label:
+        </p>
+        <table>
+          <colgroup>
+            <col style="width: 50%" />
+            <col style="width: 50%" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Zone</th>
+              <th>Intended contents and authority</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>work</code></td>
+              <td>
+                Declared work roots and approved work-provider capabilities
+              </td>
+            </tr>
+            <tr>
+              <td><code>personal</code></td>
+              <td>
+                Declared personal roots and separate personal capabilities
+              </td>
+            </tr>
+            <tr>
+              <td><code>quarantine</code></td>
+              <td>
+                A private copy/snapshot for untrusted code or web content; no
+                work/personal credentials by default
+              </td>
+            </tr>
+            <tr>
+              <td><code>cloud-admin</code></td>
+              <td>
+                A separate, higher-trust path for verified cloud plan
+                application
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          The design requires work and personal zones never to share writable
+          state, profiles, caches, roots, credentials, browser data, or audit
+          records.
+        </p>
+      </section>
+      <section id="capabilities-rather-than-ambient-access" class="level2">
+        <h2>Capabilities, rather than ambient access</h2>
+        <p>
+          Gatekeep models authority as a typed <strong>capability</strong>, with
+          a zone, adapter, target allowlist, allowed operations, request budget,
+          lease, and policy digest. The presence of a command-line binary is
+          deliberately not authority to use it.
+        </p>
+        <p>
+          For example, ordinary workbenches do not contain cloud tooling or
+          credentials. A read-only GitHub, Datadog, or CircleCI action would be
+          performed through a brokered, named capability. A denied action
+          creates a structured <code>BlockedAction</code>, records it in a local
+          inbox, and sends a host-native notification. The user may decline it
+          or start a distinct higher-authority flow; the agent receives only
+          that decision, never a raw credential or self-approval path.
+        </p>
+      </section>
+      <section id="security-and-lifecycle-model" class="level2">
+        <h2>Security and lifecycle model</h2>
+        <p>The proposal uses explicit domain state transitions:</p>
+        <pre
+          class="text"
+        ><code>ZoneSpec -&gt; VerifiedZoneSpec -&gt; CheckpointedZone -&gt; BootingWorkbench
+        -&gt; RunningWorkbench -&gt; PausedWorkbench | ExpiredWorkbench | StoppedWorkbench
+
+RawCapabilityRequest -&gt; ParsedCapabilityRequest -&gt; AuthorizedCapabilityRequest
+                     -&gt; AppliedCapabilityEffect | DeniedCapabilityRequest
+
+RawPlanArtifact -&gt; VerifiedPlanArtifact -&gt; ApprovedPlanArtifact -&gt; AppliedPlanArtifact</code></pre>
+        <p>These transitions encode key safeguards:</p>
+        <ul>
+          <li>only verified zone specifications may start a VM;</li>
+          <li>writable host mounts require a pre-start checkpoint;</li>
+          <li>only authorized requests reach capability adapters;</li>
+          <li>
+            cloud authority can be minted only for an approved, matching,
+            unexpired, one-time plan artifact;
+          </li>
+          <li>
+            restoration is allowed only after the workbench and containers stop;
+          </li>
+          <li>
+            durable state must never store raw external-service credentials.
+          </li>
+        </ul>
+        <p>
+          Workbench leases are explicit (for example, eight hours). Lock, sleep,
+          expiry, shutdown, or an emergency disable revokes brokered
+          capabilities by default.
+        </p>
+      </section>
+      <section id="platform-and-runtime-plan" class="level2">
+        <h2>Platform and runtime plan</h2>
+        <p>
+          The architecture targets admin-controlled macOS and Artix Linux
+          systems from the outset:
+        </p>
+        <ul>
+          <li><strong>macOS:</strong> Lima with the VZ backend.</li>
+          <li>
+            <strong>Artix Linux:</strong> QEMU/KVM through an init-neutral
+            launcher; a libvirt session adapter is optional.
+          </li>
+          <li>
+            <strong>Guest:</strong> a pinned Nix Linux specification, producing
+            architecture-specific guest artifacts.
+          </li>
+        </ul>
+        <p>
+          The guest contains a non-root agent user, agent toolchains,
+          guest-local tmux, a guest-local container runtime, and a startup
+          verifier. Docker/Testcontainers run <em>inside</em> the guest. Host
+          Docker sockets, credentials, and contexts remain unavailable.
+        </p>
+        <p>
+          A no-network workbench means no general outbound network, not merely a
+          guest firewall or NAT configuration. Future networking is intended to
+          be host-enforced and allowlist-based, so guest root cannot bypass it.
+        </p>
+      </section>
+      <section id="pi-and-profile-integration" class="level2">
+        <h2>Pi and profile integration</h2>
+        <p>
+          Gatekeep does not take over profile installation. It delegates the
+          complete guest-local Pi profile setup to a pinned revision of the
+          separate <code>dotagent</code> project:
+        </p>
+        <pre
+          class="text"
+        ><code>~/projects/dotagent/install-pi --dir &lt;guest-profile&gt; [--provider &lt;provider&gt;]</code></pre>
+        <p>
+          Each zone receives its own complete work or personal profile. Gatekeep
+          must not mount host-global <code>~/.pi</code>, synthesize a reduced
+          replacement profile, or share mutable profile state. Profile changes
+          are deliberate guest syncs: a running workbench keeps its current
+          verified profile digest until a refresh/restart.
+        </p>
+      </section>
+      <section id="cloud-administration" class="level2">
+        <h2>Cloud administration</h2>
+        <p>
+          Cloud administration is intentionally separate from everyday coding
+          work. A normal workbench can prepare a plan, but cannot directly apply
+          Terraform or Kubernetes changes. A cloud-admin workbench independently
+          verifies a content-addressed artifact and an unconsumed approval
+          binding before it receives short-lived, scoped authority.
+        </p>
+        <p>
+          For Terraform, approval binds the saved-plan digest,
+          workspace/backend, source revision, lockfile digest, target, expiry,
+          and nonce; Gatekeep applies that exact plan once. For Kubernetes,
+          server-side dry-run is review evidence only; apply requires a
+          digest-bound manifest bundle plus target, expiry, nonce, and
+          API-server admission enforcement.
+        </p>
+      </section>
+      <section id="delivery-roadmap" class="level2">
+        <h2>Delivery roadmap</h2>
+        <p>The design describes six incremental slices:</p>
+        <ol type="1">
+          <li>
+            <strong>Deterministic core and profile contract:</strong> Rust types
+            for zones, leases, capabilities, approvals, plan artifacts, and
+            audits; backend-neutral adapter and profile-sync interfaces.
+          </li>
+          <li>
+            <strong>Secure no-network boot:</strong> Lima/VZ and QEMU/KVM boot
+            the right Nix guest with constrained resources and no general
+            egress.
+          </li>
+          <li>
+            <strong>Writable workspaces and containers:</strong> canonical
+            writable-root validation, APFS/Btrfs checkpoints, stopped-only
+            restore, isolated profiles, guest Docker/Testcontainers, cache
+            quotas.
+          </li>
+          <li>
+            <strong>Broker and inbox:</strong> guest-to-host request protocol,
+            policy evaluation, notifications, budgets, inbox, and
+            1Password-backed read-only service adapters.
+          </li>
+          <li>
+            <strong>Controlled egress and browser work:</strong> host-enforced
+            named egress profiles and disposable browser profiles without host
+            cookies, Keychain, extensions, or downloads.
+          </li>
+          <li>
+            <strong>Approved cloud apply:</strong> cloud-admin workbench,
+            immutable plan store, one-time approvals, short-lived credentials,
+            Terraform and Kubernetes enforcement.
+          </li>
+        </ol>
+      </section>
+      <section id="verification-philosophy" class="level2">
+        <h2>Verification philosophy</h2>
+        <p>
+          The project emphasizes proving that invalid or unsafe paths cannot
+          reach effect adapters:
+        </p>
+        <ul>
+          <li>
+            unit tests for transitions, policies, budgets, digests/nonces, and
+            structured errors;
+          </li>
+          <li>property tests that generate invalid ordering combinations;</li>
+          <li>shared adapter contract tests for macOS and Artix backends;</li>
+          <li>
+            host integration tests for isolation, no-network boot, termination,
+            cache exhaustion, profile separation, checkpointing, and broker
+            behavior;
+          </li>
+          <li>
+            security regression tests for absence of host mounts, credentials,
+            Docker paths, cross-zone caches, and cloud binaries;
+          </li>
+          <li>
+            cloud-admin tests for artifact changes, expiry, replay, target
+            mismatch, drift, conflicts, and kill-switch behavior.
+          </li>
+        </ul>
+      </section>
+      <section id="explicit-boundaries-and-non-goals" class="level2">
+        <h2>Explicit boundaries and non-goals</h2>
+        <p>
+          Gatekeep does not claim a dev shell, Pi profile, tmux session, hidden
+          <code>PATH</code> command, or guest firewall is a host-security
+          boundary. It does not support unrestricted host Docker, automatically
+          trust untrusted code/web content/model output, or send approval
+          notifications to chat/email/phone by default. Support for non-admin
+          laptops is deferred and must report controls honestly if added later.
+        </p>
+      </section>
+      <section id="source" class="level2">
+        <h2>Source</h2>
+        <p>
+          This overview is based solely on the current design draft:
+          <a href="../specs/2026-08-06-gatekeep-design.md"
+            ><code
+              >docs/superpowers/specs/2026-08-06-gatekeep-design.md</code
+            ></a
+          >.
+        </p>
+      </section>
+    </section>
+  </body>
+</html>
