@@ -1,6 +1,10 @@
 # Disposable Pi Sandbox for Host-Side Herdr Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status:** Historical completed spike
+
+**Superseded by:** [`2026-08-18-named-workbench-terminal-design.md`](../specs/2026-08-18-named-workbench-terminal-design.md)
+
+> **Historical record:** Do not execute this plan as current ADE work. It records the completed disposable host-side Herdr spike.
 
 **Goal:** Create and provision one disposable Microsandbox VM that runs Pi while Herdr remains entirely on the trusted host.
 

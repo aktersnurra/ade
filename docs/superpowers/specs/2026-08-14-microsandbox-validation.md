@@ -10,7 +10,7 @@
 
 Proceed with Microsandbox as ADE's initial microVM substrate.
 
-The spike demonstrated the required isolation, networking, SSH/tmux access, persistent directory-backed workspaces, stopped-only workspace checkpointing, disposable root state, a Nix-built OCI workstation, guest package installation, and guest-local Docker.
+The spike demonstrated the required isolation, networking, historical SSH/tmux access, persistent directory-backed workspaces, stopped-only workspace checkpointing, disposable root state, a Nix-built OCI workstation, guest package installation, and guest-local Docker. SSH was a spike mechanism; the approved V1 design now uses native `msb exec` terminal and command execution.
 
 ADE must isolate Microsandbox behind an adapter because version 0.6.8 also showed lifecycle and storage quirks. Disk-backed named volumes and generic secret substitution are not accepted as production mechanisms.
 

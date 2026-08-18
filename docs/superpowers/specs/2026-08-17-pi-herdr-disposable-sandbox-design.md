@@ -79,7 +79,7 @@ Never:
 - give the guest access to the Herdr API;
 - duplicate Herdr panes, sessions, persistence, workspaces, worktrees, agent detection, or orchestration UI.
 
-The spike launched the interactive command directly from Ghostty. The current ADE design still excludes tmux from its default image. It can include guest Herdr, but ADE does not require a terminal multiplexer.
+The spike launched the interactive command directly from Ghostty. The current ADE V1 design does not install, configure, integrate with, or persist state for a terminal multiplexer.
 
 ## Authentication
 

@@ -2,7 +2,7 @@
 
 ADE is an experimental Agent Development Environment.
 
-ADE runs coding agents in named Linux workbench VMs. Each workbench keeps its root across stop and start. Declared stores survive reimage.
+ADE runs coding agents in named Linux workbench VMs. Each workbench keeps its root across stop and start. Its `/workspace` project store survives reimage.
 
 The project is in the design and validation stage. The `ade` command does not exist yet.
 
@@ -11,8 +11,7 @@ The project is in the design and validation stage. The `ade` command does not ex
 ADE aims to provide:
 
 - named workbench VMs such as `work` and `personal`;
-- generic interactive terminal sessions and remote commands;
-- Herdr as the preferred guest multiplexer, not an ADE dependency;
+- native interactive terminal sessions and guest command execution;
 - persistent, classified project stores;
 - explicit network and capability policy;
 - guest-local development tools and containers;
@@ -39,11 +38,11 @@ The guest must not receive:
 - raw long-lived service credentials;
 - a generic host command channel.
 
-ADE manages VM lifecycle, persistent storage, external policy, and bounded OpenSSH transport.
+ADE manages VM lifecycle, persistent storage, external policy, and native Microsandbox terminal execution.
 
-A user can run ADE in a plain terminal or inside a host multiplexer. The approved guest image can include Herdr for projects, tabs, panes, and agents.
+A user can run ADE in a plain terminal or inside any host multiplexer. ADE does not integrate with or configure terminal multiplexers.
 
-ADE never forwards the host Herdr socket, API, configuration, state, or host `HERDR_*` values into a VM. The guest image can define guest-local Herdr paths.
+ADE never forwards host application sockets, configuration, state, or ambient authority into a VM.
 
 ## Primary flow
 
@@ -51,8 +50,8 @@ ADE never forwards the host Herdr socket, API, configuration, state, or host `HE
 ade start work
   -> verify base-image provenance and external policy
   -> start or reuse the configured workbench
-  -> enter a generic remote shell
-  -> run Herdr or another guest tool
+  -> enter the guest shell through native `msb exec --tty`
+  -> use the shell and guest development tools
 ```
 
 Leaving the shell does not stop the workbench.
@@ -71,7 +70,7 @@ The Microsandbox spike validated:
 
 - the microVM boundary;
 - restricted and disabled networking;
-- direct SSH command execution;
+- historical direct SSH command execution, before ADE selected native execution;
 - directory-backed project-store persistence;
 - stopped-only project-store checkpoints;
 - disposable root state;
@@ -81,9 +80,7 @@ The Microsandbox spike validated:
 
 The historical substrate spike also tested tmux. ADE no longer requires a terminal multiplexer.
 
-A later disposable guest test installed Node 22.23.2 and Pi 0.84.2 without host Pi state.
-
-The test also confirmed that Herdr remained absent from the guest.
+A later disposable guest test installed Node 22.23.2 and Pi 0.84.2 without host Pi or multiplexer state.
 
 ## Repository layout
 
@@ -97,12 +94,13 @@ Start with these documents:
 
 - [ADE design](docs/superpowers/specs/2026-08-14-ade-design.md)
 - [Microsandbox validation](docs/superpowers/specs/2026-08-14-microsandbox-validation.md)
-- [Disposable Pi and Herdr spike](docs/superpowers/specs/2026-08-17-pi-herdr-disposable-sandbox-design.md)
 - [Named workbench and terminal design](docs/superpowers/specs/2026-08-18-named-workbench-terminal-design.md)
+- [Native execution qualification plan](docs/superpowers/plans/2026-08-18-microsandbox-native-execution-qualification.md)
+- [Rejected OpenSSH stdio experiment](docs/superpowers/specs/2026-08-18-microsandbox-0.6.10-ssh-transport-experiment.md)
 
 ## Planned delivery
 
-1. Upgrade to and pin Microsandbox 0.6.10, then rerun the lifecycle, network, and SSH suite, including `msb ssh serve --stdio --no-inactivity-timeout`.
+1. Pin Microsandbox 0.6.10, then qualify lifecycle, root and project-store persistence, networking, and native `msb exec` terminal and command behavior.
 2. Add `ade list`, `ade start`, `ade exec`, `ade inspect`, `ade stop`, and `ade reimage`.
 3. Add declarative project stores, classifications, explicit checkpoints, and restore controls.
 4. Add the gatekeeper protocol and a model-provider capability.
