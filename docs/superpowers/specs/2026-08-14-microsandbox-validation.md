@@ -36,7 +36,8 @@ ADE must isolate Microsandbox behind an adapter because version 0.6.8 also showe
 | Guest toolchain | Pass | Git, Jujutsu, tmux, OCaml, opam, dune, Neovim, SSH, and Nix ran |
 | Artix/KVM support | Pending | Must run the same acceptance suite on the Artix host |
 | Representative Testcontainers project | Pending | Docker-in-Docker passed, but a real language binding remains to test |
-| Pi installation and authentication | Pending | Must install the selected guest-local Pi profile without mounting host state |
+| Pi installation | Pass | A later disposable guest installed Node 22.23.2 and Pi 0.84.2 without host Pi or Herdr state |
+| Pi authentication | Pending | Must validate provider access through a gatekeeper without a guest API key |
 
 ## Nix-built workstation
 
@@ -102,7 +103,9 @@ workspace_persisted_after_vm_recreation=true
 root_state_discarded=true
 ```
 
-This validates ADE's core model: disposable session, persistent workspace.
+This validates that Microsandbox can separate disposable root state from persistent workspace state.
+
+The spike used disposable sessions. The current ADE design keeps the root across stop and start, then replaces it only during explicit reimage.
 
 ## Network and secret findings
 
@@ -160,10 +163,9 @@ Before declaring the substrate fully accepted:
 
 1. Run the same suite on Artix Linux with KVM.
 2. Run a representative OCaml or other real Testcontainers project.
-3. Install and run Pi entirely inside the guest.
-4. Validate model-provider access through the first gatekeeper rather than a guest API key.
-5. Re-test disk-backed volumes on a future Microsandbox release before enabling them.
-6. Measure cold image build, import, boot, and reset times.
+3. Validate Pi provider access through the first gatekeeper rather than a guest API key.
+4. Re-test disk-backed volumes on a future Microsandbox release before enabling them.
+5. Measure cold image build, import, boot, and reimage times.
 
 ## Conclusion
 

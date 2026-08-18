@@ -2,63 +2,83 @@
 
 **Status:** Approved design
 
+**Updated:** 2026-08-18 for named workbench VMs and generic terminal sessions
+
 **Supersedes:** [`2026-08-06-gatekeep-design.md`](2026-08-06-gatekeep-design.md)
 
 ## Product name
 
-ADE means **Agent Development Environment**. It is a local, disposable development environment in which coding agents work.
+ADE means **Agent Development Environment**. It is a local development environment in which coding agents work.
 
 Names have one meaning throughout the system:
 
 - `ade` is the product and command-line interface.
 - A `gatekeeper` is the host subsystem that mediates access to one external service.
 - A `capability` is scoped authority granted through a gatekeeper.
-- A `workspace` is persistent project state.
-- A `session` is disposable compute attached to one workspace.
+- A `workbench` is a named VM and policy boundary, such as `work` or `personal`.
+- A `workbench instance` is the current Microsandbox VM for a workbench.
+- A `project store` is persistent, classified project data.
+- A `tool-state store` is opaque persistent state for a guest tool such as Herdr.
+- A `terminal session` is a generic interactive SSH/PTTY connection to a workbench.
+- A Herdr `workspace` is a guest-local UI grouping. It is not an ADE domain object.
 
 Cloudflare OS inspired the gatekeeper terminology. Cloudflare describes a Gatekeeper as service-specific software that moderates access to an external resource, not as the capability itself.
 
 ## Goal
 
-ADE launches disposable Linux development sessions with persistent, classified workspaces. A session provides SSH, tmux, Pi, development tools, package installation, and guest-local containers without exposing ambient host authority.
+ADE manages named Linux workbench VMs with persistent, classified project stores.
+
+A workbench can run many concurrent agents. All agents in one workbench share its filesystem, processes, network policy, and capabilities. Agents that require isolation must use different workbenches.
 
 The intended interaction is:
 
 ```text
-ade work
-  -> checkpoint the workspace
-  -> start a disposable Microsandbox microVM
-  -> attach the persistent workspace
-  -> apply network and capability policy
-  -> enter guest tmux over SSH
+ade start work
+  -> verify the named configuration
+  -> stage declared stores and deny-by-default external policy
+  -> verify base-image provenance, stores, and policy
+  -> start and confirm the workbench VM
+  -> establish instance- and run-generation-bound OpenSSH transport
+  -> enter a generic guest login shell
+  -> run Herdr or another guest tool
 ```
 
-ADE is glue around existing infrastructure. It does not implement a hypervisor, VM network stack, container runtime, secret store, or general-purpose identity platform.
+ADE manages VM lifecycle, persistent storage, policy, and generic terminal transport. Guest tools manage projects, tabs, panes, agents, and worktrees.
+
+Herdr is the preferred guest multiplexer. ADE does not require Herdr or use the Herdr remote protocol.
+
+ADE is glue around existing infrastructure. It does not implement a hypervisor, VM network stack, container runtime, terminal multiplexer, secret store, or general-purpose identity platform.
 
 ## Scope
 
 The first usable version supports:
 
 - one user on an admin-controlled machine;
+- one or more named workbenches, such as `work` and `personal`;
+- many projects and concurrent agents in each running workbench;
 - macOS first and Artix Linux validation second;
 - Microsandbox as the microVM substrate;
-- a flake-defined, Nix-built OCI workstation image;
-- directory-backed persistent workspaces;
+- a flake-defined, Nix-built OCI workstation image with Herdr as a guest tool;
+- generic interactive terminal sessions and remote commands;
+- explicit persistent project and tool-state stores per workbench;
 - declarative Git repository seeding;
-- stopped-only workspace checkpoints;
-- SSH into guest-local tmux;
+- explicit stopped-only project-store checkpoints;
 - guest-local package installation and containers;
-- coarse workspace classification;
+- coarse workbench and project-store classification;
 - a small set of service-specific gatekeepers;
 - append-only capability and lifecycle receipts.
 
-The base image is replaceable. Workspace, session, network, and capability policy must not depend on Nix-specific behavior.
+The base image is replaceable. Project-store, workbench, network, and capability policy must not depend on Nix-specific behavior.
 
 ## Security model
 
 ### Trust boundary
 
-The microVM is the boundary around arbitrary guest code. Every process in a session is treated as equally untrusted and equally able to invoke any interface reachable from that session.
+A named workbench VM is one hostile security principal. There is no security boundary between agents, projects, or guest processes inside it.
+
+Compromise of one component can compromise the complete workbench. Separate workbenches isolate authority and data domains.
+
+Full compromise of a workbench must not grant reusable authority beyond its externally enforced capability envelope.
 
 The guest does not receive:
 
@@ -67,17 +87,26 @@ The guest does not receive:
 - host Docker sockets, contexts, or credentials;
 - host AWS configuration or Kubernetes configuration;
 - host-global Pi state;
+- the host Herdr socket, API, configuration, or state;
 - 1Password state;
 - raw long-lived service credentials;
 - a generic host command channel.
 
-### Disposable session, persistent workspace
+### Persistent workbench and stores
 
-A session root disk is disposable. The attached workspace persists independently.
+A named workbench keeps its writable root disk across stop and start operations. Declared stores persist independently.
 
-Destroying a session must discard root-disk changes while preserving the workspace. Resetting a session does not clear the workspace's security classification because the workspace may contain protected source code, generated artifacts, logs, or derived information.
+Base-image provenance proves that ADE created the writable root from the declared image digest. It does not attest the current guest filesystem.
 
-Snapshots and restored copies inherit the source workspace classification.
+Guest changes to the writable root are hostile persistent state. ADE records the base-image digest and root generation instead of claiming current-root integrity.
+
+An explicit reimage creates a new workbench root from the approved base image. It preserves declared project and tool-state stores.
+
+Reimage is not a security reset. Persistent stores remain hostile after reimage.
+
+Reimage does not clear project-store classification. A project store can contain protected source code, generated artifacts, logs, or derived information.
+
+Snapshots and restored copies inherit the source project-store classification.
 
 ### Network zones
 
@@ -89,29 +118,29 @@ ADE uses coarse zones rather than attempting precise byte-level information-flow
 | `work` | Allowlisted or gatekeeper-mediated | Yes | protected source and company services |
 | `sealed` | No direct egress | Explicit capabilities only | sensitive or adversarial work |
 
-Open public egress and protected capabilities cannot coexist in the same authority boundary. Once a workspace observes protected information, it cannot be reopened in `public` mode without creating a separate clean workspace.
+Open public egress and protected capabilities cannot coexist in the same authority boundary. Once a project store observes protected information, it cannot be attached in `public` mode without creating a separate clean project store.
 
 ### Capabilities
 
-A capability is session-bound authority with:
+A capability is authority bound to a named workbench, its current VM instance, and its verified policy. It has:
 
 - a service-specific gatekeeper;
 - a resource scope;
 - allowed operations;
 - allowed response destinations;
-- a workspace classification requirement;
+- a project-store classification requirement;
 - an expiry;
 - a request budget;
 - an approval policy;
 - a policy digest.
 
-The guest receives an opaque capability handle. The handle is not an external-service credential and is valid only for the bound session and policy.
+The guest receives an opaque capability handle. The handle is not an external-service credential. It is valid only for the bound workbench instance and policy.
 
 ### Gatekeepers
 
 A gatekeeper is a host-side reference monitor for one external service. It:
 
-1. authenticates the session and capability handle;
+1. authenticates the workbench instance and capability handle;
 2. validates the resource and operation;
 3. obtains or holds the real credential outside the guest;
 4. constructs or mediates the service request;
@@ -143,14 +172,14 @@ Examples:
 - signing a release requires approval;
 - mutating production infrastructure is outside the initial version.
 
-The guest cannot approve its own request. Approval binds the capability, resource, operation, request digest, session, workspace, expiry, and nonce.
+The guest cannot approve its own request. Approval binds the capability, resource, operation, request digest, workbench instance, project store, expiry, and nonce.
 
 ### Observation receipts
 
 ADE records broker-mediated observations conservatively. A receipt contains:
 
-- session and workspace identity;
-- workspace classification before and after the operation;
+- workbench, VM instance, and project-store identity;
+- project-store classification before and after the operation;
 - capability and gatekeeper;
 - resource and operation;
 - response classification;
@@ -164,10 +193,14 @@ ADE does not claim complete information-flow tracking when unmediated input or o
 
 ```text
 Host
+  optional terminal multiplexer
+    `- workbench navigation
+
   ade CLI and OCaml domain core
     |- configuration parser and verifier
-    |- workspace lifecycle
-    |- session lifecycle
+    |- declared-store lifecycle
+    |- named workbench lifecycle
+    |- bounded OpenSSH transport
     |- Microsandbox adapter
     |- gatekeeper supervisor
     `- append-only receipts
@@ -180,11 +213,13 @@ Host
 
 Microsandbox microVM
   Nix-built OCI workstation
+    |- generic login shell
+    |- Herdr as the preferred guest multiplexer
+    |- Herdr workspaces, tabs, panes, and agents
     |- Pi and development tools
     |- Nix and opam package installation
-    |- guest-local tmux
     |- guest-local container runtime
-    |- persistent /workspace mount
+    |- persistent project and tool-state mounts
     `- capability client
 ```
 
@@ -197,11 +232,14 @@ ADE wraps the `msb` command-line interface behind one narrow adapter. The adapte
 - resource limits;
 - directory-backed named volumes;
 - network policy;
-- SSH and command execution;
+- an internal generation-bound OpenSSH proxy helper;
+- a short connection lease before `msb ssh serve --stdio --no-inactivity-timeout` opens;
 - lifecycle error normalization;
 - version-specific workarounds.
 
 No Microsandbox command syntax appears in the domain core.
+
+The validated 0.6.8 binary lacks the required inactivity-timeout flag. Slice 1 pins Microsandbox 0.6.10 and reruns the lifecycle, network, and SSH suite before ADE claims support.
 
 ### Nix-built workstation image
 
@@ -209,15 +247,29 @@ The workstation image is defined by [`spike/nix-workstation/flake.nix`](../../..
 
 The image is built for the guest architecture, not the host architecture. On macOS, ADE may use a temporary Linux Microsandbox builder to produce the `aarch64-linux` OCI archive.
 
-The initial image contains Bash, Git, Jujutsu, tmux, SSH, Nix, OCaml, opam, dune, Neovim, standard build tools, and network utilities. The package list remains declarative and replaceable.
+The initial production image contains Herdr, Bash, Git, Jujutsu, SSH, Nix, OCaml, opam, dune, Neovim, standard build tools, and network utilities. It does not contain tmux. Herdr is a guest tool, and its version does not need to match a host Herdr version. The package list remains declarative and replaceable.
 
-### Workspace storage
+### Persistent storage
+
+Each workbench declares persistent stores with stable guest mount paths. The initial configuration uses a project store at `/workspace` and a narrow guest Herdr state store at `/var/lib/ade-state/herdr`.
+
+ADE treats tool-state stores as opaque data. The image manifest must use the declared mount paths and keep runtime sockets outside them.
+
+Source repositories, worktrees, and artifacts live under `/workspace`. The guest image configures Herdr worktrees under `/workspace/.herdr/worktrees`.
+
+The default image sets guest-local `HERDR_CONFIG_PATH` to a config file under `/var/lib/ade-state/herdr`. The image integration keeps Herdr's durable config and session data in that state area.
+
+It sets `HERDR_SOCKET_PATH` to a runtime path under `/run`.
+
+On first creation, the default image disables pane-history persistence and automatic native agent restore. These settings are guest defaults, not security controls.
+
+Persisted guest configuration remains hostile and can override the defaults. ADE does not persist a complete guest home directory.
 
 Directory-backed Microsandbox volumes are the initial supported storage mechanism. They passed persistence, recreation, and stopped-only copy-on-write checkpoint tests on macOS.
 
 Disk-backed named volumes are not supported in the initial version because Microsandbox 0.6.8 showed unreliable reuse behavior during the spike.
 
-Workspace creation may declare repositories to seed:
+Project-store creation may declare repositories to seed:
 
 ```ocaml
 repository ~source:"git@github.com:example/project.git" ~destination:"project"
@@ -227,13 +279,13 @@ ADE clones each repository only when its destination is absent. It does not cont
 
 ### Checkpoints
 
-Before a session starts, ADE stops all owners of the workspace and creates a host-native checkpoint:
+ADE creates a host-native project-store checkpoint only when the user requests one:
 
 - APFS copy-on-write copy on macOS;
 - Btrfs snapshot on Artix when available;
 - a clearly reported full copy fallback otherwise.
 
-Restore is allowed only while no session or guest container owns the workspace.
+Restore is allowed only while no workbench instance or guest container owns the project store. Automatic checkpoint policy is outside the first lifecycle slice.
 
 ### Guest-local containers
 
@@ -246,25 +298,43 @@ The OCaml core models lifecycle states explicitly:
 ```text
 RawConfig -> ParsedConfig -> VerifiedConfig
 
-AbsentWorkspace -> SeededWorkspace -> CheckpointedWorkspace
+AbsentProjectStore -> SeededProjectStore
 
-DeclaredSession -> StartingSession -> RunningSession
-                -> StoppedSession -> RemovedSession
+AbsentWorkbench -> StartingWorkbench -> RunningWorkbench
+RunningWorkbench -> StoppingWorkbench -> StoppedWorkbench
+StoppedWorkbench -> ReimagingWorkbench -> StoppedWorkbench
+
+RequestedTerminal -> GenerationBoundTransport -> AttachedTerminal
+RequestedExec -> GenerationBoundTransport -> CompletedExec
 
 RequestedCapability -> AuthorizedCapability
                     -> AppliedEffect | DeniedEffect | ApprovalRequired
 ```
 
+Configuration declaration is not a runtime state.
+
 Important invariants:
 
-- only a `VerifiedConfig` may create a session;
-- only a `CheckpointedWorkspace` may attach read-write;
-- a session has exactly one zone and workspace classification;
+- only a `VerifiedConfig` may create a workbench instance;
+- `RunningWorkbench` means the current instance has verified base-image provenance, store, policy, and run-generation postconditions;
+- each absent-or-stopped to running transition creates a host-managed run generation;
+- entry into an already-running workbench reuses its current generation;
+- stop invalidates the current generation;
+- terminal entry requires a `RunningWorkbench` and generation-bound SSH transport;
+- a short connection lease verifies the instance and generation while the stdio stream opens;
+- transport fails if the verified instance or generation changes before connection;
+- ADE releases the lifecycle lock before it executes the terminal client;
+- many terminal clients, projects, and agents may coexist in one workbench;
+- all agents in one workbench share its zone, project-store classification, guest control APIs, and capabilities;
+- ADE does not persist an agent registry or provide agent orchestration UI;
+- ADE lifecycle and security behavior does not depend on Herdr;
 - `public` egress cannot coexist with protected capabilities;
 - only an `AuthorizedCapability` may reach a gatekeeper adapter;
 - credentials never appear in durable domain values;
-- workspace recreation preserves classification;
-- restore requires a stopped and unowned workspace.
+- writable-root integrity is always `Not_attested`;
+- project-store recreation preserves classification;
+- reimage preserves declared stores but does not establish their integrity;
+- restore requires a stopped and unowned project store.
 
 Expected failures use structured variants with a stable code, human-readable message, and machine-readable context. Exceptions are reserved for programming errors.
 
@@ -276,11 +346,18 @@ The eventual OCaml DSL should describe outcomes rather than Microsandbox flags:
 workbench "work"
   ~zone:Work
   ~image:Images.nix_workstation
-  ~workspace:(workspace "work" ~classification:(Work "company"))
+  ~stores:
+    [ project_store "work"
+        ~mount:"/workspace"
+        ~classification:(Work "company")
+    ; tool_state "herdr" ~mount:"/var/lib/ade-state/herdr"
+    ]
   ~repositories:[ ... ]
-  ~capabilities:[ Github.work; Model.approved; Signing.agent ]
+  ~capabilities:[]
   ~resources:{ cpus = 4; memory_gib = 8; root_disk_gib = 24 }
 ```
+
+This is the V1 lifecycle configuration. Later gatekeeper slices can add protected capabilities.
 
 The DSL compiles into a verified internal specification. It does not execute effects while parsing configuration.
 
@@ -288,35 +365,53 @@ The DSL compiles into a verified internal specification. It does not execute eff
 
 ### Slice 1: Microsandbox lifecycle launcher
 
-Deliver `ade work`, `ade stop`, `ade reset`, and `ade inspect` around the validated Nix-built image and directory-backed workspace.
+Deliver `ade list`, `ade start <workbench>`, `ade exec <workbench> -- command`, `ade stop <workbench>`, `ade reimage <workbench>`, and `ade inspect <workbench>` around the validated Nix-built image and directory-backed stores. Pin Microsandbox 0.6.10 for this slice.
 
 Success means:
 
-- `ade work` checkpoints, boots, mounts, and enters tmux;
-- reset discards root state and preserves workspace state;
-- host credentials and sockets remain absent;
-- all Microsandbox failures become structured ADE errors.
+- Microsandbox 0.6.10 passes the lifecycle, network, and SSH regression suite;
+- `start` stages stores and deny-by-default policy before guest execution;
+- `Running` certifies base-image provenance, store mounts, and external policy for the current instance;
+- a running workbench with drift rejects entry instead of changing in place;
+- `start` enters a generic SSH/PTTY session after it verifies the running instance;
+- `exec` runs a bounded remote command through the same transport;
+- concurrent terminal clients can enter one running workbench;
+- transport binds to the verified VM instance and run generation;
+- lifecycle mutation and connection setup are serialized by the short connection lease;
+- stale transport loses with a structured error, or connection setup wins before mutation continues;
+- ADE releases the lifecycle lock before it executes OpenSSH;
+- the terminal session works when Herdr is absent;
+- guest Herdr works as an optional guest-local multiplexer;
+- stop preserves the root and declared stores while it terminates guest processes;
+- reimage replaces root state and preserves declared stores without claiming to clean them;
+- per-workbench lifecycle locks prevent create, start, stop, and reimage races;
+- the internal ADE transport helper validates the instance and generation before it opens `msb ssh serve --stdio --no-inactivity-timeout`;
+- interactive sessions do not inherit the Microsandbox ten-minute inactivity timeout;
+- bounded SSH transport rejects cross-workbench, cross-instance, and stale-generation routing;
+- host `HERDR_*` values remain absent from the guest, while the image can define guest-local values;
+- Slice 1 rejects configurations that request protected capabilities;
+- all Microsandbox, policy, storage, drift, and transport failures become structured ADE errors.
 
-### Slice 2: Declarative workspaces and classifications
+### Slice 2: Declarative project stores and classifications
 
-Deliver repository seeding, workspace metadata, coarse zones, checkpoint receipts, and restore.
+Deliver repository seeding, project-store metadata, coarse zones, checkpoint receipts, and restore.
 
 Success means:
 
-- repositories clone once into an empty workspace;
-- labels survive reset, snapshot, and restore;
-- a protected workspace cannot enter public mode;
-- restore is refused while the workspace is owned.
+- repositories clone once into an empty project store;
+- labels survive reimage, snapshot, and restore;
+- a protected project store cannot enter public mode;
+- restore is refused while the project store is owned.
 
 ### Slice 3: Gatekeeper protocol and model capability
 
-Deliver the authenticated guest-to-host protocol, opaque session-bound handles, policy evaluation, receipts, and one model-provider gatekeeper.
+Deliver the authenticated guest-to-host protocol, opaque workbench-instance-bound handles, policy evaluation, receipts, and one model-provider gatekeeper.
 
 Success means:
 
 - the provider credential never enters the guest;
 - only the configured endpoint/model is reachable;
-- requests and observations are attributed to the session and workspace;
+- requests and observations are attributed to the workbench instance and project store;
 - revocation immediately blocks new calls.
 
 ### Slice 4: GitHub, signing, and restricted SSH
@@ -334,9 +429,11 @@ Success means:
 
 - Unit tests cover parsers, state transitions, policy joins, classification rules, and structured errors.
 - Property tests prove invalid lifecycle and capability combinations never reach effect adapters.
-- Adapter contract tests exercise Microsandbox lifecycle behavior and known version quirks.
-- Integration tests verify VM isolation, no-network mode, allowlists, SSH/tmux, workspace persistence, root disposal, package installation, and nested containers.
-- Security tests verify absence of host home, SSH agent, Docker socket, cloud configuration, and raw credentials.
+- Adapter contract tests exercise pinned Microsandbox 0.6.10 lifecycle behavior, timeout flags, and known version quirks.
+- Integration tests verify VM isolation, pre-start deny-by-default policy, allowlists, generic terminal sessions, remote commands, disabled interactive inactivity timeout, concurrent clients, stale-generation and instance replacement rejection, declared-store persistence, explicit root reimage, package installation, and guest-local containers.
+- Optional integration tests verify outer Herdr `Ctrl-A` and guest Herdr `Ctrl-B` routing without Herdr protocol coupling.
+- Default-image tests verify durable Herdr config paths, runtime socket placement, and separation of host and guest `HERDR_*` values.
+- Security tests run adversarial guest probes for the host home, SSH agent, Docker socket, cloud configuration, raw credentials, forbidden destinations, and other workbench stores.
 - Gatekeeper tests include credential-reflection services, redirects, private-address targets, response filtering, replay, expiry, and revocation.
 - The same acceptance suite must pass on macOS and Artix before cross-platform support is claimed.
 
@@ -352,9 +449,17 @@ The initial version does not provide:
 - automatic production or cloud administration;
 - transparent host filesystem access;
 - host Docker access;
-- perfect reproducibility for mutable workspace contents.
+- perfect reproducibility for mutable project-store contents;
+- per-agent isolation within one workbench;
+- an in-guest agent supervisor;
+- an ADE agent dashboard or terminal orchestration UI;
+- a terminal-multiplexer plug-in system;
+- Herdr remote attach as an ADE protocol;
+- local Herdr desktop bridges through ADE;
+- automatic agent conversation restore.
 
 ## Sources
 
 - [Cloudflare OS](https://blog.cloudflare.com/cloudflare-os/) for service-specific Gatekeepers, capabilities, approvals, and observation tracking.
 - [`2026-08-14-microsandbox-validation.md`](2026-08-14-microsandbox-validation.md) for substrate evidence and known limitations.
+- [`2026-08-18-named-workbench-terminal-design.md`](2026-08-18-named-workbench-terminal-design.md) for named VMs and generic terminal sessions.

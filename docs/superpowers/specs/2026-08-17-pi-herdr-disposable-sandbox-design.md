@@ -1,10 +1,12 @@
 # Disposable Pi Sandbox for Host-Side Herdr
 
-**Status:** Approved for implementation planning
+**Status:** Historical host-only integration spike
+
+**Superseded by:** [`2026-08-18-named-workbench-terminal-design.md`](2026-08-18-named-workbench-terminal-design.md)
 
 ## Objective
 
-Create one disposable Microsandbox VM that can run Pi while Herdr remains entirely on the trusted host.
+This spike created one disposable Microsandbox VM that could run Pi while Herdr remained entirely on the trusted host. It validated the initial host/guest boundary but does not define the current named-workbench architecture.
 
 The interactive launch command is:
 
@@ -58,9 +60,9 @@ Place the npm installation under `/root/.local`. Configure the sandbox's guest `
 
 Do not install Herdr in the guest. Do not copy or mount host Pi state, provider credentials, shell configuration, or authentication files.
 
-## Host-side Herdr boundary
+## Historical host-side Herdr boundary
 
-Herdr remains installed and running only on the trusted host.
+For this spike, Herdr remained installed and running only on the trusted host.
 
 Set `HERDR_AGENT=pi` only on the host-visible `msb` wrapper process:
 
@@ -77,7 +79,7 @@ Never:
 - give the guest access to the Herdr API;
 - duplicate Herdr panes, sessions, persistence, workspaces, worktrees, agent detection, or orchestration UI.
 
-Launch the interactive command directly from Ghostty. Do not nest Herdr inside tmux because both use `Ctrl-A`.
+The spike launched the interactive command directly from Ghostty. The current ADE design still excludes tmux from its default image. It can include guest Herdr, but ADE does not require a terminal multiplexer.
 
 ## Authentication
 
