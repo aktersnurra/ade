@@ -1,0 +1,49 @@
+# Copy to ~/.config/ade/profiles/work-cloud.sh and edit the marked policy.
+# shellcheck shell=bash disable=SC2034
+
+PROFILE_HOME="${ADE_WORK_CLOUD_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/ade/workbenches/work-cloud}"
+SANDBOX_NAME="${ADE_WORK_CLOUD_SANDBOX:-ade-work-cloud}"
+IMAGE="${ADE_WORK_CLOUD_IMAGE:-ade-nix-workstation:0.1.0}"
+if [[ -n "${ADE_WORK_CLOUD_IMAGE:-}" ]]; then
+  EXPECTED_IMAGE_DIGEST="${ADE_WORK_CLOUD_IMAGE_DIGEST:-}"
+else
+  EXPECTED_IMAGE_DIGEST="sha256:5c0bffada804326ae73d3bf3778a77358aa236974e27d9f80a7ec88e826a1997"
+fi
+CPUS="${ADE_WORK_CLOUD_CPUS:-4}"
+MEMORY="${ADE_WORK_CLOUD_MEMORY:-8G}"
+ROOT_DISK="${ADE_WORK_CLOUD_ROOT_DISK:-24G}"
+
+PERSIST_DIRS=(
+  "$PROFILE_HOME/workspace"
+  "$PROFILE_HOME/config"
+  "$PROFILE_HOME/cache"
+  "$PROFILE_HOME/state"
+)
+MOUNTS=(
+  "$PROFILE_HOME/workspace:/workspace"
+  "$PROFILE_HOME/config:/root/.config"
+  "$PROFILE_HOME/cache:/root/.cache"
+  "$PROFILE_HOME/state:/root/.local/state"
+)
+
+# Keep credentials outside the workspace. Point this at a directory containing
+# only the identity intended for this VM (for example a dedicated .aws tree).
+if [[ -n "${ADE_WORK_CLOUD_CREDENTIALS_DIR:-}" ]]; then
+  PERSIST_DIRS+=("$ADE_WORK_CLOUD_CREDENTIALS_DIR")
+  MOUNTS+=("$ADE_WORK_CLOUD_CREDENTIALS_DIR:/root/.cloud-credentials")
+fi
+
+# Add exact provider endpoints required by the selected account and region.
+# Examples might include sts.amazonaws.com or a region-specific API endpoint.
+NETWORK_ARGS=(
+  --no-net
+  --net-rule "allow:egress@dns"
+  # --net-rule "allow@REPLACE_WITH_REQUIRED_HOST:tcp:443"
+)
+
+CREDENTIAL_ENV_FILE=""
+SECRET_SPECS=()
+REQUIRED_SECRETS=()
+ENV_ARGS=()
+EXTRA_CREATE_ARGS=()
+DEFAULT_SHELL=(/bin/bash -l)

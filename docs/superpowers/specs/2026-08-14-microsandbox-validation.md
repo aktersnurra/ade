@@ -44,8 +44,8 @@ ADE must isolate Microsandbox behind an adapter because version 0.6.8 also showe
 The reproducible spike definition is in:
 
 ```text
-spike/nix-workstation/flake.nix
-spike/nix-workstation/flake.lock
+images/nix-workstation/flake.nix
+images/nix-workstation/flake.lock
 ```
 
 The final local image, built before the ADE naming decision, was:

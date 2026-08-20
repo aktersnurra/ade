@@ -1,0 +1,40 @@
+{ pkgs }:
+let
+  ocamlPackages = pkgs.ocaml-ng.ocamlPackages_5_5;
+in
+with pkgs; [
+  bashInteractive
+  cacert
+  coreutils
+  curl
+  dockerTools.binSh
+  dockerTools.fakeNss
+  dockerTools.usrBinEnv
+  dune_3
+  fd
+  file
+  findutils
+  gawk
+  gcc
+  git
+  gnumake
+  gnugrep
+  gnused
+  go
+  jq
+  jujutsu
+  less
+  neovim
+  nix
+  nodejs_22
+  ocamlPackages.ocaml
+  opam
+  pkg-config
+  python3
+  ripgrep
+  rustc
+  cargo
+  tmux
+  which
+  zsh
+]

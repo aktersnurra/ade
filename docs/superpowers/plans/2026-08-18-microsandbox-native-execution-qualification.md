@@ -77,7 +77,7 @@ set -euo pipefail
 cd "$(jj root)"
 
 export QUAL_ROOT
-QUAL_ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/ade-msb-0610-native.XXXXXX")" && pwd -P)"
+QUAL_ROOT="$(cd "$(mktemp -d "/private/tmp/ade-msb-0610-native.XXXXXX")" && pwd -P)"
 export MSB_HOME="$QUAL_ROOT/msb-home"
 export MSB_BIN="$QUAL_ROOT/bin/msb"
 export MSB_DYLD_DIR="$QUAL_ROOT/bin"
@@ -129,6 +129,7 @@ printf '%s  %s\n' \
   a1742728676bbdfa3850e59df4b85b9df7dabcfd7e1c270876725aecdd3e992c \
   "$QUAL_ROOT/download/microsandbox-darwin-aarch64.tar.gz" | shasum -a 256 -c -
 tar -xzf "$QUAL_ROOT/download/microsandbox-darwin-aarch64.tar.gz" -C "$QUAL_ROOT/bin"
+chmod 0755 "$MSB_BIN"
 test "$(env MSB_HOME="$MSB_HOME" DYLD_LIBRARY_PATH="$MSB_DYLD_DIR" "$MSB_BIN" --version)" = 'msb 0.6.10'
 test -z "$(env MSB_HOME="$MSB_HOME" DYLD_LIBRARY_PATH="$MSB_DYLD_DIR" "$MSB_BIN" list | tail -n +2 | sed '/^[[:space:]]*$/d')"
 record_pass release_archive 'official msb 0.6.10 archive checksum and version verified'
@@ -277,7 +278,7 @@ msbq exec --no-tty ade-msb-0610-personal -- test -e /root/ade-root-marker \
 root_check_rc=$?
 set -e
 test "$root_check_rc" -eq 1
-test ! -s "$QUAL_ROOT/evidence/replaced-root-check.err"
+test -z "$(awk '!/^[[:space:]]*• Backend[[:space:]]+local[[:space:]]*$/' "$QUAL_ROOT/evidence/replaced-root-check.err")"
 test "$(msbq exec --no-tty ade-msb-0610-personal -- cat /mnt/marker)" = personal-marker
 record_pass root_replacement 'replacement removed writable-root marker and preserved the project store'
 ```

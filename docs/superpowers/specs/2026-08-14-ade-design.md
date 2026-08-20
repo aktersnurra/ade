@@ -238,7 +238,7 @@ Slice 1 pins Microsandbox 0.6.10 and qualifies its lifecycle, root and project-s
 
 ### Nix-built workstation image
 
-The workstation image is defined by [`spike/nix-workstation/flake.nix`](../../../spike/nix-workstation/flake.nix) during validation and will move to a production image module after the design is accepted.
+The workstation image was validated as a spike and is now maintained at [`images/nix-workstation/flake.nix`](../../../images/nix-workstation/flake.nix).
 
 The image is built for the guest architecture, not the host architecture. On macOS, ADE may use a temporary Linux Microsandbox builder to produce the `aarch64-linux` OCI archive.
 

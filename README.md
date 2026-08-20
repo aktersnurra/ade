@@ -1,111 +1,101 @@
-# ADE
+# ADE Microsandbox Workbenches
 
-ADE is an experimental Agent Development Environment.
+ADE is a runnable, configurable Microsandbox 0.6.10 workstation setup. Microsandbox remains the runtime; this repository supplies reproducible OCI images and editable capability profiles for images, resources, mounts, networking, credentials, persistence, and native execution.
 
-ADE runs coding agents in named Linux workbench VMs. Each workbench keeps its root across stop and start. Its `/workspace` project store survives reimage.
+There is no SSH transport, custom VM runtime, or parallel lifecycle state machine.
 
-The project is in the design and validation stage. The `ade` command does not exist yet.
+## What is included
 
-## Goals
+- `bin/ade` — a transparent profile launcher around native `msb` commands;
+- `profiles/work.sh` — deny-by-default work allowlist with optional repository and identity mounts;
+- `profiles/work-offline.sh` — isolated workbench with no network or credential source;
+- `profiles/work-cloud.sh.example` — safe starting point for provider-specific cloud authority;
+- `profiles/personal.sh` — public-network personal profile with separate persistent state;
+- `images/nix-workstation/` — configurable `aarch64-linux` OCI image built with Nix;
+- `docs/microsandbox-workbenches.md` — complete configuration and operation reference;
+- pinned Microsandbox 0.6.10 validation and qualification documents.
 
-ADE aims to provide:
+Profiles are executable Bash configuration. They can select any image, mount arbitrary configured host paths, choose any Microsandbox network policy, load credentials from any host mechanism, bake or mount configuration, and append native create options.
 
-- named workbench VMs such as `work` and `personal`;
-- native interactive terminal sessions and guest command execution;
-- persistent, classified project stores;
-- explicit network and capability policy;
-- guest-local development tools and containers;
-- host-side gatekeepers for narrow privileged actions;
-- append-only lifecycle and capability receipts.
+## Install the qualified runtime
 
-ADE uses existing infrastructure. It does not implement a hypervisor, network stack, container runtime, secret store, or terminal multiplexer.
-
-## Security model
-
-A workbench VM is one hostile security principal. Agents and guest processes inside one workbench are not isolated from each other.
-
-Use separate workbenches when agents must not share authority or data.
-
-Full compromise of a workbench must not grant reusable authority beyond its externally enforced capability envelope.
-
-The guest must not receive:
-
-- the host home directory;
-- host SSH credentials or agent forwarding;
-- the host Docker socket or credentials;
-- host cloud configuration;
-- host-global Pi state;
-- raw long-lived service credentials;
-- a generic host command channel.
-
-ADE manages VM lifecycle, persistent storage, external policy, and native Microsandbox terminal execution.
-
-A user can run ADE in a plain terminal or inside any host multiplexer. ADE does not integrate with or configure terminal multiplexers.
-
-ADE never forwards host application sockets, configuration, state, or ambient authority into a VM.
-
-## Primary flow
-
-```text
-ade start work
-  -> verify base-image provenance and external policy
-  -> start or reuse the configured workbench
-  -> enter the guest shell through native `msb exec --tty`
-  -> use the shell and guest development tools
+```sh
+./scripts/install-msb.sh
 ```
 
-Leaving the shell does not stop the workbench.
+This installs the checksum-verified Microsandbox 0.6.10 runtime under `~/.local/share/ade/runtime/` without replacing Homebrew or writing `~/.microsandbox`. `bin/ade` discovers it automatically. `MSB_BIN` and `MSB_HOME` remain explicit overrides.
 
-## Current state
+## Build and load the workstation image
 
-The repository contains:
-
-- the ADE design;
-- Microsandbox validation results for Apple silicon macOS;
-- a flake-defined, Nix-built `aarch64-linux` workstation image spike;
-- a validated disposable Pi sandbox plan from the earlier host-only spike;
-- an approved named-workbench design with generic terminal sessions.
-
-The Microsandbox spike validated:
-
-- the microVM boundary;
-- restricted and disabled networking;
-- historical direct SSH command execution, before ADE selected native execution;
-- directory-backed project-store persistence;
-- stopped-only project-store checkpoints;
-- disposable root state;
-- guest package installation;
-- guest-local Docker;
-- a Nix-built OCI workstation.
-
-The historical substrate spike also tested tmux. ADE no longer requires a terminal multiplexer.
-
-A later disposable guest test installed Node 22.23.2 and Pi 0.84.2 without host Pi or multiplexer state.
-
-## Repository layout
-
-```text
-docs/superpowers/specs/   Design and validation documents
-docs/superpowers/plans/   Approved implementation plans
-spike/nix-workstation/    Nix workstation image spike
+```sh
+./bin/ade build-image
+./bin/ade load-image
 ```
 
-Start with these documents:
+On macOS, the image targets `aarch64-linux` and therefore requires a Linux Nix builder. See the workbench guide for the disposable Microsandbox builder workflow.
 
-- [ADE design](docs/superpowers/specs/2026-08-14-ade-design.md)
-- [Microsandbox validation](docs/superpowers/specs/2026-08-14-microsandbox-validation.md)
-- [Named workbench and terminal design](docs/superpowers/specs/2026-08-18-named-workbench-terminal-design.md)
-- [Native execution qualification plan](docs/superpowers/plans/2026-08-18-microsandbox-native-execution-qualification.md)
-- [Rejected OpenSSH stdio experiment](docs/superpowers/specs/2026-08-18-microsandbox-0.6.10-ssh-transport-experiment.md)
+## Agents run inside the VM
 
-## Planned delivery
+Install and authenticate agent harnesses inside the selected VM. The checked-in
+profiles do not forward ambient host API keys or PATs. VM-local login state is
+kept in each profile's persistent `/root/.config` mount, which separates work
+and personal authority.
 
-1. Pin Microsandbox 0.6.10, then qualify lifecycle, root and project-store persistence, networking, and native `msb exec` terminal and command behavior.
-2. Add `ade list`, `ade start`, `ade exec`, `ade inspect`, `ade stop`, and `ade reimage`.
-3. Add declarative project stores, classifications, explicit checkpoints, and restore controls.
-4. Add the gatekeeper protocol and a model-provider capability.
-5. Add narrow GitHub, signing, and restricted SSH gatekeepers.
+Mount a repository tree explicitly when an agent needs it:
 
-## Status
+```sh
+export ADE_WORK_REPOS="$HOME/work/repos"
+./bin/ade start work
+```
 
-ADE is a research project. Do not treat the current image or commands as a production security boundary.
+`ade reimage` replaces only the guest root. Mounted repositories and
+configuration survive, so inspect mounted data and rotate exposed credentials
+after a compromise.
+
+## Run workbenches
+
+```sh
+./bin/ade create work
+./bin/ade start work
+./bin/ade start work-offline
+
+./bin/ade exec work -- uname -a
+./bin/ade stream work -- sh -lc 'cat'
+./bin/ade inspect work
+./bin/ade stop work
+./bin/ade reimage work
+
+./bin/ade start personal
+```
+
+`start` explicitly establishes a running sandbox and then enters its native Microsandbox PTY. Leaving the shell does not stop the sandbox. `reimage` removes and recreates the VM while preserving every host-backed mount.
+
+## Customize
+
+Edit the checked-in profiles or place replacements at:
+
+```text
+~/.config/ade/profiles/work.sh
+~/.config/ade/profiles/work-offline.sh
+~/.config/ade/profiles/work-cloud.sh
+~/.config/ade/profiles/personal.sh
+```
+
+The image package set is `images/nix-workstation/packages.nix`. Files under `images/nix-workstation/root/` are baked verbatim into the image.
+
+Credential environment files default to:
+
+```text
+~/.config/ade/credentials/work.env
+~/.config/ade/credentials/personal.env
+```
+
+They are optional. Profiles may instead load credentials from macOS Keychain, 1Password, `pass`, SOPS, mounted files, baked image files, or any other desired source.
+
+## Documentation
+
+- [Microsandbox workbench guide](docs/microsandbox-workbenches.md)
+- [Microsandbox 0.6.10 native execution validation](docs/superpowers/specs/2026-08-18-microsandbox-0.6.10-native-execution-validation.md)
+- [Native execution qualification](docs/superpowers/plans/2026-08-18-microsandbox-native-execution-qualification.md)
+
+Earlier ADE architecture documents remain as historical design records and are not the current implementation contract.
