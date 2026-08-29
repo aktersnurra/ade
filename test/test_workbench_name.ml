@@ -43,7 +43,16 @@ let%hegel_test accepted_names_round_trip tc =
    bound. This is an independent restatement of the contract, so an
    implementation that widened or narrowed its alphabet would fail here. *)
 let%hegel_test acceptance_matches_contract tc =
-  let value = Hegel.Generators.(draw tc (text ())) in
+  (* Two sources deliberately: arbitrary Unicode explores rejection, while a
+     long string drawn from exactly the permitted alphabet explores the length
+     boundary, which arbitrary text would essentially never reach. *)
+  let value =
+    Hegel.Generators.(
+      draw tc
+        (one_of
+           [ text ();
+             text ~alphabet:"abz09-_" ~min_size:60 ~max_size:70 () ]))
+  in
   let permitted c =
     (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '-' || c = '_'
   in

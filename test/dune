@@ -15,3 +15,14 @@
  (modules test_declaration)
  (libraries ade alcotest)
  (deps (glob_files %{project_root}/workbenches/*)))
+
+(test
+ (name test_process_runner)
+ (modules test_process_runner)
+ (libraries ade alcotest unix))
+
+(test
+ (name test_smolvm)
+ (modules test_smolvm)
+ (libraries ade alcotest)
+ (deps (glob_files %{project_root}/workbenches/*)))
