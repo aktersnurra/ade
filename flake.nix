@@ -33,6 +33,7 @@
       packages = forAllSystems (pkgs: {
         ade = adePackage pkgs;
         default = adePackage pkgs;
+        smolvm = pkgs.callPackage ./nix/smolvm.nix { libkrun = null; };
       });
 
       devShells = forAllSystems (pkgs: {

@@ -1,0 +1,40 @@
+# Work workbench: employer identity and repositories.
+#
+# Egress is a positive allowlist. Allowlisting a hostname is not operation-level
+# authorization; it only permits the workbench to reach that endpoint.
+
+name = "work"
+image = "docker.io/library/ade-workstation@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+smolfile = "smolfiles/workstation.Smolfile"
+
+[resources]
+cpus = 6
+memory_mib = 12288
+overlay_gib = 32
+workspace_gib = 256
+
+[network]
+posture = "allowlisted"
+hosts = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "objects.githubusercontent.com",
+  "registry.npmjs.org",
+  "proxy.golang.org",
+  "crates.io",
+  "static.crates.io",
+]
+cidrs = []
+
+[services]
+docker = true
+herdr = true
+
+[ssh]
+mode = "dedicated_agent"
+key_ref = "keychain:ade-work-ssh"
+
+[backup]
+directory = "~/ade-backups/work"
+keep = 5

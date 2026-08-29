@@ -1,0 +1,4 @@
+(library
+ (name ade)
+ (public_name ade.lib)
+ (libraries cmdliner otoml yojson digestif digestif.ocaml bos rresult))

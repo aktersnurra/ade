@@ -1,0 +1,37 @@
+# Example cloud workbench.
+#
+# Copy to work-cloud.toml and replace the placeholder endpoints with the ones
+# your own cloud workflow requires. This example intentionally contains no
+# account identifiers, project names, or secrets.
+
+name = "work-cloud"
+image = "docker.io/library/ade-workstation@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+smolfile = "smolfiles/workstation.Smolfile"
+
+[resources]
+cpus = 4
+memory_mib = 8192
+overlay_gib = 32
+workspace_gib = 128
+
+[network]
+posture = "allowlisted"
+hosts = [
+  "github.com",
+  "api.github.com",
+  "kubernetes.default.svc",
+  "REPLACE-ME.example.com",
+]
+cidrs = []
+
+[services]
+docker = true
+herdr = true
+
+[ssh]
+mode = "dedicated_agent"
+key_ref = "keychain:ade-work-cloud-ssh"
+
+[backup]
+directory = "~/ade-backups/work-cloud"
+keep = 3

@@ -1,0 +1,29 @@
+# Personal workbench: explicitly opts into unrestricted egress.
+#
+# SmolVM exposes no negative CIDR rules, so "public" cannot exclude private
+# ranges. Anything sensitive belongs in a sealed or allowlisted workbench.
+
+name = "personal"
+image = "docker.io/library/ade-workstation@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+smolfile = "smolfiles/workstation.Smolfile"
+
+[resources]
+cpus = 4
+memory_mib = 8192
+overlay_gib = 32
+workspace_gib = 128
+
+[network]
+posture = "public"
+
+[services]
+docker = true
+herdr = true
+
+[ssh]
+mode = "dedicated_agent"
+key_ref = "keychain:ade-personal-ssh"
+
+[backup]
+directory = "~/ade-backups/personal"
+keep = 3

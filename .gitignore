@@ -5,3 +5,5 @@ artifacts/
 .hegel/
 _build/
 result
+__pycache__/
+*.pyc

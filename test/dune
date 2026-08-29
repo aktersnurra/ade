@@ -1,4 +1,17 @@
 (test
  (name test_cli)
+ (modules test_cli)
  (libraries alcotest bos)
  (deps %{exe:../bin/main.exe}))
+
+(test
+ (name test_workbench_name)
+ (modules test_workbench_name)
+ (libraries ade alcotest hegel)
+ (preprocess (pps ppx_hegel_test)))
+
+(test
+ (name test_declaration)
+ (modules test_declaration)
+ (libraries ade alcotest)
+ (deps (glob_files %{project_root}/workbenches/*)))

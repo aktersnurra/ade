@@ -1,0 +1,27 @@
+# Offline work workbench: no network, no credentials.
+#
+# Used for reviewing or running untrusted code that must not reach any endpoint.
+
+name = "work-offline"
+image = "docker.io/library/ade-workstation@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+smolfile = "smolfiles/workstation.Smolfile"
+
+[resources]
+cpus = 4
+memory_mib = 8192
+overlay_gib = 32
+workspace_gib = 128
+
+[network]
+posture = "sealed"
+
+[services]
+docker = true
+herdr = true
+
+[ssh]
+mode = "disabled"
+
+[backup]
+directory = "~/ade-backups/work-offline"
+keep = 3
