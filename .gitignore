@@ -2,3 +2,6 @@
 .pi-subagents/
 .rpiv/
 artifacts/
+.hegel/
+_build/
+result
