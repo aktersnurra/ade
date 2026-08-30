@@ -79,7 +79,15 @@ rustPlatform.buildRustPackage {
   doInstallCheck = true;
   installCheckPhase = ''
     runHook preInstallCheck
-    "$out/bin/smolvm" --version | grep -q "${version}"
+
+    # The CLI prints an informational note about packed assets on stderr, so the
+    # version assertion reads stdout only.
+    version_output="$("$out/bin/smolvm" --version 2>/dev/null)"
+    echo "smolvm reports: $version_output"
+    case "$version_output" in
+      *"${version}"*) ;;
+      *) echo "expected smolvm ${version}, got '$version_output'" >&2; exit 1 ;;
+    esac
   '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
     codesign -d --entitlements :- "$out/bin/.smolvm-wrapped" 2>&1 \
       | grep -q com.apple.security.hypervisor

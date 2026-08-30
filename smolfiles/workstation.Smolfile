@@ -1,0 +1,18 @@
+# ADE workstation machine definition.
+#
+# The entrypoint deliberately does not launch Herdr agents or any hook supplied
+# by /workspace. ADE starts services itself, after installing the current
+# credential generation, so a compromised workspace cannot get code running
+# before the user attaches.
+#
+# A compromised persistent guest root may still alter its own future startup.
+# Reimage is what removes that mutable root.
+
+FROM ade-workstation
+
+# Trusted configuration lives outside /workspace and is reconstructed from the
+# host declaration; it is never loaded from agent-writable storage.
+WORKDIR /workspace
+
+# An inert shell. ADE runs the real startup sequence through machine exec.
+ENTRYPOINT ["/bin/sh", "-c", "exec sleep infinity"]

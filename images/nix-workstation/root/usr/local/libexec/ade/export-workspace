@@ -1,0 +1,27 @@
+#!/bin/sh
+# Export /workspace into the transaction staging mount.
+#
+# Narrowly scoped on purpose: this helper is not a second guest agent. It runs
+# in a machine ADE is about to delete, so its output is untrusted input that the
+# host validates before anything is deleted.
+#
+# Usage: export-workspace /mnt/ade-export
+
+set -eu
+
+destination="${1:?usage: export-workspace DESTINATION}"
+[ -d "$destination" ] || { echo "no such directory: $destination" >&2; exit 1; }
+
+archive="$destination/workspace.tar"
+
+# Numeric ownership and no setuid/setgid preservation: the host validator
+# rejects those anyway, and there is no reason to carry them across.
+tar --create \
+    --file "$archive" \
+    --numeric-owner \
+    --mode='go-w' \
+    --directory /workspace \
+    .
+
+sync
+echo "exported /workspace to $archive"
