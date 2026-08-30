@@ -55,3 +55,8 @@
 (rule
  (alias hegel)
  (action (run %{exe:test_bundle_properties.exe})))
+
+(test
+ (name test_reimage)
+ (modules test_reimage)
+ (libraries ade alcotest))
