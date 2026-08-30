@@ -89,8 +89,13 @@ rustPlatform.buildRustPackage {
       *) echo "expected smolvm ${version}, got '$version_output'" >&2; exit 1 ;;
     esac
   '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
-    codesign -d --entitlements :- "$out/bin/.smolvm-wrapped" 2>&1 \
-      | grep -q com.apple.security.hypervisor
+    # codesign is a host tool and is not on the build sandbox PATH, so it is
+    # invoked by absolute path, exactly as it is for signing above.
+    entitlements="$(/usr/bin/codesign -d --entitlements - "$out/bin/.smolvm-wrapped" 2>&1)"
+    case "$entitlements" in
+      *com.apple.security.hypervisor*) echo "hypervisor entitlement present" ;;
+      *) echo "missing hypervisor entitlement" >&2; exit 1 ;;
+    esac
   '' + ''
     runHook postInstallCheck
   '';

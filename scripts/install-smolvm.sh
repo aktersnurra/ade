@@ -43,20 +43,31 @@ if [[ "${actual_version}" != "${EXPECTED_VERSION}" ]]; then
 fi
 
 # Verify the macOS hypervisor entitlement.
-# A test double supplies entitlements.plist; a real build carries a signature.
+#
+# The entitlement lives on the executable the kernel actually loads. A Nix build
+# wraps the binary, so bin/smolvm is a shell wrapper and the signed Mach-O is
+# bin/.smolvm-wrapped; check that when it is present.
+#
+# A test double supplies entitlements.plist instead of a real signature.
+signed_binary="${binary}"
+if [[ -f "${result}/bin/.smolvm-wrapped" ]]; then
+  signed_binary="${result}/bin/.smolvm-wrapped"
+fi
+
 entitlements=""
 if [[ -f "${result}/entitlements.plist" ]]; then
   entitlements="$(cat "${result}/entitlements.plist")"
-elif command -v codesign >/dev/null 2>&1; then
-  entitlements="$(codesign -d --entitlements :- "${binary}" 2>&1 || true)"
+elif [[ -x /usr/bin/codesign ]]; then
+  entitlements="$(/usr/bin/codesign -d --entitlements - "${signed_binary}" 2>&1 || true)"
 fi
 
 if ! printf '%s' "${entitlements}" | grep -q 'com.apple.security.hypervisor'; then
-  fail "missing hypervisor entitlement on ${binary}"
+  fail "missing hypervisor entitlement on ${signed_binary}"
 fi
 
-# Record the digest of exactly what is being installed.
-digest="$(shasum -a 256 "${binary}" | awk '{print $1}')"
+# Record the digest of exactly what is being installed: the signed Mach-O, not
+# the wrapper script around it.
+digest="$(shasum -a 256 "${signed_binary}" | awk '{print $1}')"
 
 mkdir -p "${install_root}"
 staging="$(mktemp -d "${install_root}/.staging-XXXXXX")"
