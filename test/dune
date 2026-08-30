@@ -60,3 +60,8 @@
  (name test_reimage)
  (modules test_reimage)
  (libraries ade alcotest))
+
+(test
+ (name test_destroy)
+ (modules test_destroy)
+ (libraries ade alcotest))
