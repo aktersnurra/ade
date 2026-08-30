@@ -10,11 +10,15 @@
 , fetchFromGitHub
 , pkg-config
 , makeWrapper
+, runCommand
 , libkrun ? null
+, agent-rootfs ? null
 , jq
 , gzip
 , gnutar
 , coreutils
+, e2fsprogs
+, libkrunfw ? null
 }:
 
 let
@@ -28,7 +32,21 @@ let
     hash = "sha256-jLcJpAoF+as+y15oaL8u9Z+YFIBjyFgMC2K3sNQh4VM=";
   };
 
-  runtimeDeps = [ jq gzip gnutar coreutils ];
+  # smolvm shells out to mkfs.ext4 on the host to pre-format the storage and
+  # overlay disks, so e2fsprogs must be on the runtime PATH.
+  runtimeDeps = [ jq gzip gnutar coreutils e2fsprogs ];
+
+  # smolvm looks for libkrun and libkrunfw in one directory. They are separate
+  # derivations, so a small tree links both into a single lib dir.
+  libDir =
+    if libkrun == null || libkrunfw == null then null
+    else
+      runCommand "smolvm-lib-dir" { } ''
+        mkdir -p "$out/lib"
+        for lib in ${lib.getLib libkrun}/lib/* ${lib.getLib libkrunfw}/lib/*; do
+          ln -s "$lib" "$out/lib/$(basename "$lib")"
+        done
+      '';
 in
 rustPlatform.buildRustPackage {
   pname = "smolvm";
@@ -51,8 +69,15 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   postFixup = ''
+    # SMOLVM_AGENT_ROOTFS points at the pinned guest rootfs, so the runtime is
+    # self-contained: it does not depend on a rootfs built imperatively on the
+    # host, or on an unsigned prebuilt release artifact.
     wrapProgram "$out/bin/smolvm" \
-      --prefix PATH : ${lib.makeBinPath runtimeDeps}
+      --prefix PATH : ${lib.makeBinPath runtimeDeps} \
+      ${lib.optionalString (agent-rootfs != null)
+        ''--set-default SMOLVM_AGENT_ROOTFS "${agent-rootfs}"''} \
+      ${lib.optionalString (libDir != null)
+        ''--set-default SMOLVM_LIB_DIR "${libDir}/lib"''}
   '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
     # wrapProgram has renamed the real executable, so the library reference and
     # the signature must be applied to the wrapped binary: that is the file the

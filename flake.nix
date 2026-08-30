@@ -56,12 +56,18 @@
             withNet = true;
             withGpu = pkgs.stdenv.hostPlatform.isLinux;
           };
+          smolvm-agent = pkgs.callPackage ./nix/smolvm-agent.nix { };
+          agent-rootfs = pkgs.callPackage ./nix/agent-rootfs.nix {
+            inherit smolvm-agent;
+          };
         in
         {
           ade = adePackage pkgs;
           default = adePackage pkgs;
-          inherit libkrunfw libkrun;
-          smolvm = pkgs.callPackage ./nix/smolvm.nix { inherit libkrun; };
+          inherit libkrunfw libkrun smolvm-agent agent-rootfs;
+          smolvm = pkgs.callPackage ./nix/smolvm.nix {
+            inherit libkrun libkrunfw agent-rootfs;
+          };
         });
 
       devShells = forAllSystems (pkgs: {
