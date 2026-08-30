@@ -50,16 +50,30 @@ rustPlatform.buildRustPackage {
 
   doCheck = false;
 
-  postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''
-    cp ${src}/smolvm.entitlements entitlements.plist
-    /usr/bin/codesign --force --sign - \
-      --entitlements entitlements.plist \
-      "$out/bin/smolvm"
-  '';
-
   postFixup = ''
     wrapProgram "$out/bin/smolvm" \
       --prefix PATH : ${lib.makeBinPath runtimeDeps}
+  '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
+    # wrapProgram has renamed the real executable, so the library reference and
+    # the signature must be applied to the wrapped binary: that is the file the
+    # kernel actually loads and checks entitlements on.
+    real="$out/bin/.smolvm-wrapped"
+
+    # smolvm weak-links libkrun, and records it as the bare name
+    # "libkrun.1.dylib". dyld never resolves a bare name through rpath, so the
+    # reference itself must be rewritten to the pinned library's absolute path.
+    ${lib.optionalString (libkrun != null) ''
+      install_name_tool \
+        -change libkrun.1.dylib "${lib.getLib libkrun}/lib/libkrun.1.dylib" \
+        "$real"
+    ''}
+
+    # Signing must follow install_name_tool, which invalidates any existing
+    # signature.
+    cp ${src}/smolvm.entitlements entitlements.plist
+    /usr/bin/codesign --force --sign - \
+      --entitlements entitlements.plist \
+      "$real"
   '';
 
   doInstallCheck = true;
@@ -67,7 +81,7 @@ rustPlatform.buildRustPackage {
     runHook preInstallCheck
     "$out/bin/smolvm" --version | grep -q "${version}"
   '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
-    codesign -d --entitlements :- "$out/bin/smolvm" 2>&1 \
+    codesign -d --entitlements :- "$out/bin/.smolvm-wrapped" 2>&1 \
       | grep -q com.apple.security.hypervisor
   '' + ''
     runHook postInstallCheck

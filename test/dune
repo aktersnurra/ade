@@ -40,3 +40,18 @@
  (modules test_lifecycle)
  (libraries ade alcotest)
  (deps (glob_files %{project_root}/workbenches/*)))
+
+(test
+ (name test_workspace_bundle)
+ (modules test_workspace_bundle)
+ (libraries ade alcotest unix))
+
+(executable
+ (name test_bundle_properties)
+ (modules test_bundle_properties)
+ (libraries ade alcotest hegel core)
+ (preprocess (pps ppx_hegel_test)))
+
+(rule
+ (alias hegel)
+ (action (run %{exe:test_bundle_properties.exe})))
