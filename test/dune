@@ -65,3 +65,8 @@
  (name test_destroy)
  (modules test_destroy)
  (libraries ade alcotest))
+
+(test
+ (name test_credential)
+ (modules test_credential)
+ (libraries ade alcotest))
