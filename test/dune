@@ -4,11 +4,19 @@
  (libraries alcotest bos)
  (deps %{exe:../bin/main.exe}))
 
-(test
+; Property tests. Hegel loads a native libhegel and is only published for
+; darwin-arm64, so this suite needs the native arm64 opam switch and must run
+; under `arch -arm64`. It is excluded from the default alias so that
+; `nix develop -c dune runtest` stays green; see docs/hegel-testing.md.
+(executable
  (name test_workbench_name)
  (modules test_workbench_name)
  (libraries ade alcotest hegel)
  (preprocess (pps ppx_hegel_test)))
+
+(rule
+ (alias hegel)
+ (action (run %{exe:test_workbench_name.exe})))
 
 (test
  (name test_declaration)
@@ -24,5 +32,11 @@
 (test
  (name test_smolvm)
  (modules test_smolvm)
+ (libraries ade alcotest)
+ (deps (glob_files %{project_root}/workbenches/*)))
+
+(test
+ (name test_lifecycle)
+ (modules test_lifecycle)
  (libraries ade alcotest)
  (deps (glob_files %{project_root}/workbenches/*)))

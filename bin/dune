@@ -2,4 +2,4 @@
  (name main)
  (public_name ade)
  (package ade)
- (libraries cmdliner))
+ (libraries cmdliner ade))
