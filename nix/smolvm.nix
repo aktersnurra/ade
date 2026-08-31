@@ -56,6 +56,11 @@ rustPlatform.buildRustPackage {
     lockFile = "${src}/Cargo.lock";
   };
 
+  # smolvm 1.13.1 assumes a libkrun where the implicit vsock is gone, but the
+  # libkrun revision its own flake pins still creates one, so krun_add_vsock
+  # always fails with -EEXIST. See the patch header for the full analysis.
+  patches = [ ./patches/smolvm-disable-implicit-vsock.patch ];
+
   nativeBuildInputs = [ pkg-config makeWrapper ];
 
   # Apple frameworks (including Hypervisor) come from the darwin stdenv SDK in
