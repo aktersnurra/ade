@@ -61,10 +61,22 @@
     {
       packages = forAllSystems (pkgs:
         let
-          libkrunfw = pkgs.callPackage ./nix/libkrunfw.nix { src = libkrunfw-src; };
+          # Built from pinned source, but not currently usable: see
+          # nix/libkrunfw-upstream.nix for why the published artifact is used
+          # instead. Kept so a source build can be re-tested with a suitable
+          # compiler.
+          libkrunfw-source = pkgs.callPackage ./nix/libkrunfw.nix {
+            src = libkrunfw-src;
+          };
+
+          libkrunfw = pkgs.callPackage ./nix/libkrunfw-upstream.nix { };
+          # libkrun links against libkrunfw's headers and stub only; the kernel
+          # payload it loads at runtime is whichever library SMOLVM_LIB_DIR
+          # provides. It therefore builds against the source expression, while
+          # the runtime uses the upstream artifact.
           libkrun = pkgs.callPackage ./nix/libkrun.nix {
             src = libkrun-src;
-            inherit libkrunfw;
+            libkrunfw = libkrunfw-source;
             withBlk = true;
             withNet = true;
             withGpu = pkgs.stdenv.hostPlatform.isLinux;
@@ -77,7 +89,7 @@
         {
           ade = adePackage pkgs;
           default = adePackage pkgs;
-          inherit libkrunfw libkrun smolvm-agent agent-rootfs;
+          inherit libkrunfw libkrunfw-source libkrun smolvm-agent agent-rootfs;
           smolvm = pkgs.callPackage ./nix/smolvm.nix {
             inherit libkrun libkrunfw agent-rootfs;
           };

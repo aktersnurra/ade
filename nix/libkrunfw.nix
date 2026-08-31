@@ -22,21 +22,18 @@ assert lib.elem variant [
 ];
 
 let
-  # Upstream builds the guest kernel with Debian's GCC 12.2.0 (visible in the
-  # published library's "Linux version" banner). Nixpkgs' default cross compiler
-  # is GCC 15.3.0, three major versions newer, which produced a 1.5 MB larger
-  # kernel that boots but never reaches init.
+  # Upstream compiles the guest kernel with Debian GCC 12.2.0, recorded in the
+  # kernel's own version banner. Nixpkgs' default aarch64 cross compiler is GCC
+  # 15.3.0, and that kernel boots but never reaches init. GCC 12 has been
+  # removed from nixpkgs; GCC 13 is the nearest available but is uncached and
+  # bootstraps from source, so this has not been proven to work.
   #
-  # GCC 12 has been removed from nixpkgs, so 13 is the closest available and
-  # the nearest match to what upstream actually ships.
-  crossPkgs = if stdenv.hostPlatform.isAarch64
-    then pkgsCross.aarch64-multiplatform
-    else pkgsCross.gnu64;
+  # This expression is therefore not used by default. See
+  # nix/libkrunfw-upstream.nix.
+  linuxCrossCc = if stdenv.hostPlatform.isAarch64
+    then pkgsCross.aarch64-multiplatform.stdenv.cc
+    else pkgsCross.gnu64.stdenv.cc;
 
-  linuxCrossCc = crossPkgs.buildPackages.wrapCCWith {
-    cc = crossPkgs.buildPackages.gcc13.cc;
-    bintools = crossPkgs.stdenv.cc.bintools;
-  };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "libkrunfw" + lib.optionalString (variant != null) "-${variant}";
