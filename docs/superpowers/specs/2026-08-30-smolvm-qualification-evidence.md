@@ -191,32 +191,59 @@ guest agent, and pull an image:
 So the source-built binary, the `install_name_tool` ABI fix, and the pinned
 agent rootfs are all correct. Two defects remain, both ADE's own.
 
-### Remaining defect 1: the guest rootfs is missing crun
+### Fixed: the guest rootfs now runs containers
 
-The agent boots and reaches container execution, then:
+`crun` and the guest utilities are back, taken as Alpine packages rather than
+nixpkgs' `pkgsStatic`: Alpine's builds already target the exact musl this
+minirootfs ships, so no cross toolchain is rebuilt. An `.apk` is a gzipped tar,
+unpacked over the rootfs in dependency order.
+
+Added `crun` (at `/usr/bin/crun`, where the agent spawns it), `libseccomp`,
+`yajl`, `libcap2`, `jq`, `e2fsprogs`, `e2fsprogs-extra` and `util-linux-misc`.
+`libseccomp` was not obvious: without it `crun` is found and executed but fails
+relocation on `seccomp_syscall_resolve_name`. A build assertion now fails if
+`crun` is absent, since otherwise it only surfaces at container start.
+
+Verified with upstream's libraries: a VM boots on ADE's rootfs, pulls an image
+and runs a container reporting `Linux aarch64`, Alpine 3.24.1, pid 1 = `init`.
+
+### Remaining defect: ADE's libkrunfw kernel differs from upstream's
+
+With ADE's own libkrun + libkrunfw, the guest kernel boots and reaches
 
 ```
-failed to spawn crun: No such file or directory. Is crun installed at /usr/bin/crun?
+[    0.230127] Memory Limit: none
 ```
 
-This is the deliberate omission recorded in `nix/agent-rootfs.nix`: the Alpine
-packages (`crun`, `e2fsprogs`, `util-linux`, `jq`) were dropped because
-nixpkgs' `pkgsStatic` for musl is largely uncached and rebuilds a toolchain
-from source. Busybox covers the basics but not OCI execution. They have to come
-back, and `crun` must land at `/usr/bin/crun`.
+then the boot process exits with code 0 and the agent never becomes ready. That
+is the last kernel message before init, so the kernel starts and init does not.
 
-### Remaining defect 2: ADE's libkrun pair does not boot
+What has been ruled out:
 
-With ADE's own libkrun 2.0.0-dev + libkrunfw 5.5.0, the boot subprocess exits
-with code 0 and an empty console. Mixing one ADE library with one upstream
-library fails differently (code 134, abort), so the two are version-coupled and
-must be diagnosed as a pair.
+- **libkrun API.** Both libraries export the same 61 symbols.
+- **libkrun features.** Upstream additionally links `libvirglrenderer` (GPU),
+  but GPU is opt-in per machine, `ensure_gpu_runtime` is a no-op on macOS, and a
+  missing `krun_set_gpu_options2` produces an explicit error rather than a
+  silent exit.
+- **Kernel version.** Both embed `Linux version 6.12.95`.
+- **Kernel patches.** All 121 upstream patches apply cleanly, including
+  `0001-krunfw-Don-t-panic-when-init-dies`.
+- **Kernel config file.** The build uses `config-libkrunfw_aarch64` with
+  `ARCH=arm64`, as upstream's Makefile intends.
 
-Upstream's `libkrun.dylib` is 6,580,368 bytes against ADE's 6,158,480, and
-their `libkrunfw.5.dylib` is 13,446,800 against ADE's 15,141,904 — the builds
-differ materially, most likely in build flags or feature selection rather than
-in being broken outright.
+What is measurably different: the embedded kernel payload is **14,942,209
+bytes** against upstream's **13,369,345** — 1.5 MB larger, from the same source
+and version. Both libraries export the same three symbols
+(`krunfw_get_kernel`, `krunfw_get_version`, `KERNEL_BUNDLE`).
 
-This is now the only thing blocking a fully self-built runtime, and it is
-tractable: both libraries build, and there is a known-good reference to
-difference against.
+A 1.5 MB delta from an identical config file points at `make olddefconfig`,
+which fills in options the shipped config does not pin. Upstream builds the
+macOS artifact through `build_on_krunvm.sh` (inside a Linux VM), while this
+build cross-compiles with `OS=Linux` forced on a macOS host; the two can
+plausibly resolve those defaults differently.
+
+Next diagnostic: extract the final `.config` from both builds and diff them.
+That names the differing options directly instead of inferring from size. The
+practical alternative is to keep using upstream's published `libkrunfw`, which
+is already known to work with ADE's binary and rootfs, and treat a fully
+self-built libkrunfw as a separate goal.
