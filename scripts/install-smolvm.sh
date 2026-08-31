@@ -81,16 +81,22 @@ chmod -R u+w "${staging}"
 # The Nix wrapper hardcodes store paths for bash, coreutils, tar and gzip. The
 # managed runtime is meant to outlive any particular store generation, so a
 # garbage collection would otherwise leave an installed runtime whose entry
-# point references deleted paths. The signed Mach-O next to it keeps working;
+# point references deleted paths: the signed Mach-O beside it keeps working and
 # only the wrapper breaks, which makes the failure confusing.
 #
-# The replacement records the environment values by literal string, so it
-# depends on nothing that can be collected.
+# The replacement carries the runtime settings as literal values, so it depends
+# on nothing that can be collected.
 if [[ -f "${staging}/bin/.smolvm-wrapped" ]]; then
+  # Nix writes these as: NAME=${NAME-'/nix/store/...'}
+  extract_setting() {
+    sed -n "s/.*$1=\\\${$1-'\\([^']*\\)'}.*/\\1/p" "${result}/bin/smolvm" | head -n1
+  }
+
   agent_rootfs=""
+  lib_dir=""
   if [[ -f "${result}/bin/smolvm" ]]; then
-    agent_rootfs="$(sed -n 's/.*SMOLVM_AGENT_ROOTFS=.\([^"'"'"']*\).*/\1/p' \
-      "${result}/bin/smolvm" | head -n1)"
+    agent_rootfs="$(extract_setting SMOLVM_AGENT_ROOTFS)"
+    lib_dir="$(extract_setting SMOLVM_LIB_DIR)"
   fi
 
   {
@@ -100,12 +106,19 @@ if [[ -f "${staging}/bin/.smolvm-wrapped" ]]; then
       printf 'SMOLVM_AGENT_ROOTFS="${SMOLVM_AGENT_ROOTFS:-%s}"\n' "${agent_rootfs}"
       printf 'export SMOLVM_AGENT_ROOTFS\n'
     fi
+    if [[ -n "${lib_dir}" ]]; then
+      printf 'SMOLVM_LIB_DIR="${SMOLVM_LIB_DIR:-%s}"\n' "${lib_dir}"
+      printf 'export SMOLVM_LIB_DIR\n'
+    fi
     printf 'exec "$(dirname "$0")/.smolvm-wrapped" "$@"\n'
   } > "${staging}/bin/smolvm"
   chmod 755 "${staging}/bin/smolvm"
+
+  # The runtime is unusable without these, so fail loudly rather than install a
+  # wrapper that will only break at boot.
+  [[ -n "${agent_rootfs}" ]] || fail "could not determine SMOLVM_AGENT_ROOTFS from ${result}/bin/smolvm"
+  [[ -n "${lib_dir}" ]] || fail "could not determine SMOLVM_LIB_DIR from ${result}/bin/smolvm"
 fi
-printf '%s\n' "${digest}" > "${staging}/SMOLVM_SHA256"
-printf '%s\n' "${EXPECTED_VERSION}" > "${staging}/SMOLVM_VERSION"
 
 target="${install_root}/${VERSION_DIR}"
 rm -rf "${target}.previous"

@@ -1,17 +1,20 @@
 Disable libkrun's implicit vsock before adding an explicit one.
 
-smolvm 1.13.1 calls krun_add_vsock on the assumption that libkrun no longer
-creates a vsock implicitly ("Upstream libkrun no longer creates an implicit
-vsock; add explicitly", launcher_dynamic.rs). The libkrun revision smolvm's own
-flake pins (98163265) still defaults VsockConfig to Implicit, and its
-krun_add_vsock returns -EEXIST unless the config is Disabled, so every boot on
-this pin fails with "krun_add_vsock with TSI failed".
+smolvm 1.13.1 assumes a libkrun where the implicit vsock is gone -- its own
+comment says "the old krun_disable_implicit_vsock is gone". But the libkrun
+revision smolvm's flake pins (98163265) still defaults VsockConfig to Implicit,
+and its krun_add_vsock returns -EEXIST unless the config is Disabled. Every
+boot on the approved pin fails with "krun_add_vsock with TSI failed".
 
-That libkrun exports krun_disable_implicit_vsock, which sets the config to
-Disabled. smolvm never calls it. This patch loads the symbol optionally and
-calls it before each krun_add_vsock, so the sequence works both on the pinned
-libkrun and on newer revisions where the symbol is gone and there is no
-implicit vsock to disable.
+That libkrun does still export krun_disable_implicit_vsock, which sets the
+config to Disabled. This patch loads the symbol optionally and calls it before
+each krun_add_vsock, so the sequence works on the pinned libkrun and stays
+correct on newer revisions where the symbol is absent and there is no implicit
+vsock to disable.
+
+Both launchers are patched. launcher.rs drives the boot path that actually
+fails; launcher_dynamic.rs carries the same sequence and would fail the same
+way.
 
 --- a/src/agent/krun.rs
 +++ b/src/agent/krun.rs
@@ -42,6 +45,49 @@ implicit vsock to disable.
              add_virtio_console_default,
              set_egress_policy,
              add_net_unixstream,
+--- a/src/agent/launcher.rs
++++ b/src/agent/launcher.rs
+@@ -763,6 +763,10 @@
+         let krun_add_virtiofs3 = krun.add_virtiofs3;
+         let krun_start_enter = krun.start_enter;
+         let krun_add_vsock = krun.add_vsock;
++        // Present only on libkrun revisions that still create a vsock
++        // implicitly; there, krun_add_vsock returns -EEXIST until the implicit
++        // device is disabled.
++        let krun_disable_implicit_vsock = krun.disable_implicit_vsock;
+         let krun_get_guest_ram = krun.get_guest_ram;
+ 
+         // Set log level (0 = off, 1 = error, 2 = warn, 3 = info, 4 = debug)
+@@ -1016,6 +1020,9 @@
+             EffectiveNetworkBackend::None => {
+                 // Upstream libkrun no longer creates an implicit vsock (the old
+                 // krun_disable_implicit_vsock is gone), so just add it explicitly.
++                if let Some(disable) = krun_disable_implicit_vsock {
++                    let _ = disable(ctx);
++                }
+                 if krun_add_vsock(ctx, 0) < 0 {
+                     krun_free_ctx(ctx);
+                     return Err(Error::agent("configure vsock", "krun_add_vsock failed"));
+@@ -1025,6 +1032,9 @@
+                 None
+             }
+             EffectiveNetworkBackend::Tsi => {
++                if let Some(disable) = krun_disable_implicit_vsock {
++                    let _ = disable(ctx);
++                }
+                 if krun_add_vsock(ctx, TSI_FEATURE_HIJACK_INET) < 0 {
+                     krun_free_ctx(ctx);
+                     return Err(Error::agent(
+@@ -1143,6 +1153,9 @@
+                 // implicit vsock, so add it explicitly (no TSI hijacking — virtio-net
+                 // owns the network path); otherwise krun_add_vsock_port2 below fails
+                 // with ENODEV.
++                if let Some(disable) = krun_disable_implicit_vsock {
++                    let _ = disable(ctx);
++                }
+                 if krun_add_vsock(ctx, 0) < 0 {
+                     krun_free_ctx(ctx);
+                     return Err(Error::agent("configure vsock", "krun_add_vsock failed"));
 --- a/src/agent/launcher_dynamic.rs
 +++ b/src/agent/launcher_dynamic.rs
 @@ -29,6 +29,22 @@
