@@ -61,26 +61,26 @@
     {
       packages = forAllSystems (pkgs:
         let
-          # Built from pinned source, but not currently usable: see
-          # nix/libkrunfw-upstream.nix for why the published artifact is used
-          # instead. Kept so a source build can be re-tested with a suitable
-          # compiler.
+          # libkrun and libkrunfw come from upstream's published release as a
+          # matched pair, pinned by hash. They are version-coupled: pairing a
+          # locally built libkrun with upstream's libkrunfw (or the reverse)
+          # aborts at VM start. See nix/smolvm-libs-upstream.nix for why the
+          # kernel cannot currently be built here.
+          smolvm-libs = pkgs.callPackage ./nix/smolvm-libs-upstream.nix { };
+
+          # Kept so a source build can be re-tested with a suitable compiler.
           libkrunfw-source = pkgs.callPackage ./nix/libkrunfw.nix {
             src = libkrunfw-src;
           };
 
-          libkrunfw = pkgs.callPackage ./nix/libkrunfw-upstream.nix { };
-          # libkrun links against libkrunfw's headers and stub only; the kernel
-          # payload it loads at runtime is whichever library SMOLVM_LIB_DIR
-          # provides. It therefore builds against the source expression, while
-          # the runtime uses the upstream artifact.
-          libkrun = pkgs.callPackage ./nix/libkrun.nix {
+          libkrun-source = pkgs.callPackage ./nix/libkrun.nix {
             src = libkrun-src;
             libkrunfw = libkrunfw-source;
             withBlk = true;
             withNet = true;
             withGpu = pkgs.stdenv.hostPlatform.isLinux;
           };
+
           smolvm-agent = pkgs.callPackage ./nix/smolvm-agent.nix { };
           agent-rootfs = pkgs.callPackage ./nix/agent-rootfs.nix {
             inherit smolvm-agent;
@@ -89,9 +89,11 @@
         {
           ade = adePackage pkgs;
           default = adePackage pkgs;
-          inherit libkrunfw libkrunfw-source libkrun smolvm-agent agent-rootfs;
+          inherit smolvm-libs libkrunfw-source libkrun-source smolvm-agent agent-rootfs;
           smolvm = pkgs.callPackage ./nix/smolvm.nix {
-            inherit libkrun libkrunfw agent-rootfs;
+            libkrun = smolvm-libs;
+            libkrunfw = smolvm-libs;
+            inherit agent-rootfs;
           };
         });
 

@@ -43,8 +43,10 @@ let
     else
       runCommand "smolvm-lib-dir" { } ''
         mkdir -p "$out/lib"
+        # -f because libkrun and libkrunfw may be the same derivation, in which
+        # case the two globs list identical files.
         for lib in ${lib.getLib libkrun}/lib/* ${lib.getLib libkrunfw}/lib/*; do
-          ln -s "$lib" "$out/lib/$(basename "$lib")"
+          ln -sf "$lib" "$out/lib/$(basename "$lib")"
         done
       '';
 in
@@ -89,15 +91,21 @@ rustPlatform.buildRustPackage {
     # "libkrun.1.dylib". dyld never resolves a bare name through rpath, so the
     # reference itself must be rewritten to the pinned library's absolute path.
     ${lib.optionalString (libkrun != null) ''
-      # The recorded name carries libkrun's ABI version, which changes across
-      # revisions (1.x -> 2.x), so both the reference and the target are read
-      # from the binary and the library directory rather than hardcoded.
-      krun_ref="$(otool -L "$real" | awk '$1 ~ /^libkrun\./ { print $1; exit }')"
-      krun_lib="${lib.getLib libkrun}/lib/$krun_ref"
+      # The recorded libkrun reference varies: a bare name (libkrun.2.dylib)
+      # when linked against a versioned dylib, or @rpath/libkrun.dylib when
+      # linked against upstream's. Rewrite whichever form is present to the
+      # pinned library's absolute path, so no rpath search is needed at runtime.
+      krun_ref="$(otool -L "$real" | awk '$1 ~ /libkrun\.[^/]*dylib$/ { print $1; exit }')"
 
       if [ -z "$krun_ref" ]; then
-        echo "no bare libkrun reference found in $real" >&2
+        echo "no libkrun reference found in $real" >&2
+        otool -L "$real" >&2
         exit 1
+      fi
+
+      krun_lib="${lib.getLib libkrun}/lib/$(basename "$krun_ref")"
+      if [ ! -e "$krun_lib" ]; then
+        krun_lib="${lib.getLib libkrun}/lib/libkrun.dylib"
       fi
       if [ ! -e "$krun_lib" ]; then
         echo "libkrun does not provide $krun_ref" >&2

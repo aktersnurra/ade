@@ -212,37 +212,87 @@ and runs a container reporting `Linux aarch64`, Alpine 3.24.1, pid 1 = `init`.
 The kernel's own version banner names the compiler, and the two builds differ:
 
 ```
-upstream: Linux version 6.12.95 (root@libkrunfw) (gcc (Debian 12.2.0-14+deb12u1) 12.2.0, ...
-ADE:      Linux version 6.12.95 (root@libkrunfw) (aarch64-unknown-linux-gnu-gcc (GCC) 15.3.0, ...
+upstream: Linux version 6.12.95 ... (gcc (Debian 12.2.0-14+deb12u1) 12.2.0, ...
+ADE:      Linux version 6.12.95 ... (aarch64-unknown-linux-gnu-gcc (GCC) 15.3.0, ...
 ```
 
-Upstream compiles the guest kernel with **Debian GCC 12.2.0**. Nixpkgs' default
-aarch64 cross compiler is **GCC 15.3.0** — three major versions newer. That
-accounts for the 1.5 MB payload difference and for a kernel that boots but
-never reaches init.
+Upstream compiles the guest kernel with **Debian GCC 12.2.0**; nixpkgs' aarch64
+cross compiler is **GCC 15.3.0**, three major versions newer. That accounts for
+the 1.5 MB payload difference and a kernel that boots but never reaches init.
+GCC 12 has been removed from nixpkgs as unmaintained.
 
-The kernel configuration was ruled out along the way. Resolving
-`config-libkrunfw_aarch64` with `make olddefconfig` adds only 19 entries, all
-either compiler-identification symbols (`CONFIG_GCC_VERSION`,
-`CONFIG_CC_VERSION_TEXT`, `CONFIG_RUSTC_*`) or ordinary dependency closures
-(`CONFIG_DST_CACHE`, `CONFIG_FIB_RULES`, `CONFIG_GRO_CELLS`). `CONFIG_LSM`
-looked alarming because it lists `lockdown` and `ipe`, but neither module is
-compiled in — the string is only an ordering hint, not an enablement.
+The kernel *configuration* was ruled out: resolving `config-libkrunfw_aarch64`
+with `make olddefconfig` adds only 19 entries, all compiler-identification
+symbols or ordinary dependency closures. `CONFIG_LSM` lists `lockdown` and
+`ipe`, but neither is compiled in — the string is an ordering hint.
 
-The shipped config also records `CONFIG_CC_VERSION_TEXT="gcc (GCC) 16.1.1 ...
-(Red Hat 16.1.1-1)"`, so upstream generates that file on a Linux host and
-compiles the shipped artifact with Debian's GCC 12 — neither matches a macOS
-cross build.
+### libkrun and libkrunfw are version-coupled
 
-### Fix in progress
+Pairing a locally built libkrun with upstream's libkrunfw, or the reverse,
+aborts at VM start (SIGABRT, exit 134) even at nominally matching versions.
+They must come from the same build.
 
-`nix/libkrunfw.nix` now pins the cross compiler to GCC 13, the closest version
-nixpkgs still carries: GCC 12 was removed as unmaintained. GCC 13 is not in the
-binary cache, so the build bootstraps the compiler from source before the
-kernel, which takes considerably longer than previous rounds.
+### Resolution: upstream's libraries, pinned by hash
 
-If GCC 13 still does not produce a bootable kernel, the difference is narrower
-than a compiler generation and the remaining options are to build libkrunfw the
-way upstream does (inside a Linux VM, via `build_on_krunvm.sh`), or to consume
-upstream's published `libkrunfw` and treat a self-built one as a separate goal.
-Upstream's library is already proven to work with ADE's own binary and rootfs.
+`nix/smolvm-libs-upstream.nix` extracts the whole `lib/` directory from
+upstream's published release, pinned by SHA-256 against their
+`checksums.sha256`. The whole directory matters: upstream's libkrun links
+`libvirglrenderer`, which pulls `libepoxy` and `libMoltenVK`, and a missing one
+surfaces only as a dyld failure at first run. An install assertion now checks
+for each required library and for the embedded kernel version.
+
+The tradeoff, stated plainly: the SmolVM CLI, the guest agent and the agent
+rootfs are still built from pinned source, and the library pair is immutable
+and hash-verified — but it carries no signature or provenance attestation,
+which is the property the design objects to. `libkrunfw-source` and
+`libkrun-source` are retained so a source build can be re-tested with a
+suitable compiler.
+
+## Working end to end (2026-09-01)
+
+The installed runtime, with no environment overrides, boots a VM and runs a
+container:
+
+```
+$ smolvm machine run --net --image alpine -- sh -c 'uname -sm; cat /etc/alpine-release; echo pid1=$(cat /proc/1/comm)'
+Linux aarch64
+3.24.1
+pid1=init
+```
+
+ADE's own CLI drives that runtime:
+
+```
+$ ade status work-offline
+work-offline	absent
+```
+
+Installed binary SHA-256: `220ef903e2c72a4b805a83c3d30e3953e3b3e59d517ef07f5cee3267159174f8`.
+
+### Defects fixed to get here
+
+1. Missing agent rootfs — packaged as a pinned derivation.
+2. Missing `mkfs.ext4` — e2fsprogs on the runtime PATH.
+3. libkrunfw built as a Linux ELF instead of a Mach-O dylib.
+4. The implicit-vsock mismatch — resolved by correcting the libkrun pin to
+   smolvm's submodule commit rather than its stale flake input.
+5. A 118-byte agent socket path against macOS's 104-byte `sun_path` limit,
+   caused by the qualification harness using `$TMPDIR` for isolation.
+6. `crun` and the guest utilities missing from the rootfs.
+7. The guest kernel compiler mismatch.
+
+### Qualification constraints learned
+
+- **Use a short HOME.** `$TMPDIR` paths exceed the Unix socket limit and the
+  failure is silent and misleading.
+- **Never mix library builds.** libkrun and libkrunfw must come from one build.
+- **Validate the harness against a known-good baseline** before trusting a
+  negative result. An earlier revision of this document concluded the runtime
+  was broken on this host; the harness was.
+
+### Still open
+
+- The workstation image build (Task 6) and the full runtime qualification suite
+  (Task 13) are now unblocked but not yet run.
+- `workbenches/*.toml` still pin an all-zeros image digest placeholder, which
+  the declaration parser accepts as well-formed but which names no real image.
