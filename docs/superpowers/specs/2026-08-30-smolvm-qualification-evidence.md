@@ -149,59 +149,74 @@ Ruled out:
 - **Pin drift.** Now aligned with the submodules upstream treats as
   authoritative.
 
-### Isolated: upstream's own release fails identically
+### VMs do boot on this host (correction)
 
-The upstream-published release was run as a control: `smolvm-1.13.1-darwin-arm64
-.tar.gz`, checksum `da877a29...` verified against upstream's `checksums.sha256`.
-It bundles upstream's binary, their `lib/` (libkrun + libkrunfw), and their
-`agent-rootfs`. Nothing from ADE is involved.
+An earlier revision of this document concluded that "SmolVM 1.13.1 does not boot
+a VM on this host". **That was wrong, and it was caused by the test harness.**
 
-It fails with a byte-identical signature:
+Every qualification run used a temporary `HOME` under `$TMPDIR` for isolation.
+On macOS that path is ~63 characters, which pushes the agent's Unix socket to
+118 bytes:
 
 ```
-thread 'fc_vcpu 0' panicked at src/vmm/src/macos/vstate.rs:696:14
-thread 'fc_vcpu 1' panicked at src/vmm/src/macos/vstate.rs:525:79
-krun_start_enter returned: -22
+/var/folders/jp/.../T/tmp.6sRJYM2Bwy/Library/Caches/smolvm/vms/<id>/agent.sock
 ```
 
-`agent-console.log` is empty in both cases: no guest instruction ever executes.
+`sun_path` on macOS is capped at 104 bytes. The socket could never bind, the
+vCPUs panicked, and libkrun reported `krun_start_enter -22`. Upstream's release
+"failed identically" only because it was run under the same long `HOME`.
 
-Upstream's `smolvm-bin` carries `com.apple.security.hypervisor`, `allow-jit` and
-`disable-library-validation`, and `codesign -v` passes.
+With the real `HOME`, or any short isolated one, upstream's release boots:
 
-**Conclusion: SmolVM 1.13.1 does not boot a VM on this host.** The failure is in
-the runtime on this macOS/hardware combination, not in ADE's packaging. Every
-component ADE builds — the source-built binary, the pinned libkrun/libkrunfw,
-the agent rootfs — reproduces exactly what upstream's own artifact does.
+```
+$ HOME=/tmp/adeq/h.OgoX ./smolvm machine run --net --image alpine -- echo hello
+hello
+```
 
-Host: macOS 26.5.2, Apple M1.
+**Qualification must use a short HOME.** `$TMPDIR` is unusable for this, and the
+failure mode is silent and misleading.
 
-This also retroactively validates the four defects fixed earlier. They were real
-and had to be fixed to reach this point, but none of them was the cause: ADE's
-build now behaves indistinguishably from upstream's.
+### ADE's binary and rootfs are good
 
-### What this means for the migration
+With upstream's library pair, ADE's own binary and agent rootfs boot, start the
+guest agent, and pull an image:
 
-The ADE host controller does not depend on this. It is complete and tested
-against a fake runtime: 127 tests covering declarations, the process boundary,
-the SmolVM adapter, lifecycle convergence, archive validation, the reimage
-journal, destroy authorization, and credential handling.
+| binary | libs | rootfs | result |
+| --- | --- | --- | --- |
+| ADE | upstream | upstream | boots, runs command |
+| ADE | upstream | **ADE** | boots, agent runs, fails at `crun` |
+| upstream | upstream | **ADE** | boots, agent runs, fails at `crun` |
+| ADE | **ADE** | ADE | boot process exits (code 0) |
 
-What is blocked is anything requiring a booted VM: the runtime qualification
-suite, the workstation image build, and therefore Task 14's removal of the
-Microsandbox surface.
+So the source-built binary, the `install_name_tool` ABI fix, and the pinned
+agent rootfs are all correct. Two defects remain, both ADE's own.
 
-Options, none of which ADE can decide on its own:
+### Remaining defect 1: the guest rootfs is missing crun
 
-1. **Report upstream.** The reproducer is minimal and uses only their published
-   artifact: create a machine, start it, observe the vCPU panic. This is the
-   cheapest path and the most likely to produce a real fix.
-2. **Try another SmolVM version.** 1.13.1 is the approved pin, but the defect is
-   in the runtime, so a different release may simply work. Changes the approved
-   pin.
-3. **Try another host.** A different macOS version or an Apple Silicon
-   generation other than M1 would establish how narrow the failure is.
+The agent boots and reaches container execution, then:
 
-Until a VM boots somewhere, the Microsandbox baseline must stay: the plan's
-gate says the SmolVM suite has to pass before that surface is removed, and it
-cannot pass.
+```
+failed to spawn crun: No such file or directory. Is crun installed at /usr/bin/crun?
+```
+
+This is the deliberate omission recorded in `nix/agent-rootfs.nix`: the Alpine
+packages (`crun`, `e2fsprogs`, `util-linux`, `jq`) were dropped because
+nixpkgs' `pkgsStatic` for musl is largely uncached and rebuilds a toolchain
+from source. Busybox covers the basics but not OCI execution. They have to come
+back, and `crun` must land at `/usr/bin/crun`.
+
+### Remaining defect 2: ADE's libkrun pair does not boot
+
+With ADE's own libkrun 2.0.0-dev + libkrunfw 5.5.0, the boot subprocess exits
+with code 0 and an empty console. Mixing one ADE library with one upstream
+library fails differently (code 134, abort), so the two are version-coupled and
+must be diagnosed as a pair.
+
+Upstream's `libkrun.dylib` is 6,580,368 bytes against ADE's 6,158,480, and
+their `libkrunfw.5.dylib` is 13,446,800 against ADE's 15,141,904 — the builds
+differ materially, most likely in build flags or feature selection rather than
+in being broken outright.
+
+This is now the only thing blocking a fully self-built runtime, and it is
+tractable: both libraries build, and there is a known-good reference to
+difference against.
