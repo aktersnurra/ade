@@ -92,6 +92,33 @@ stdenv.mkDerivation (finalAttrs: {
     "TDX=1"
   ];
 
+  # Upstream's expression passes OS=Linux on macOS so the guest kernel
+  # cross-builds. But OS also selects the *host* library format, so the result
+  # is an ELF .so the macOS loader rejects with "slice is not valid mach-o
+  # file", and smolvm then reports libkrunfw as missing entirely.
+  #
+  # The kernel bundle (kernel.c) is plain, OS-independent C; only the final link
+  # differs. So the Linux pass produces the bundle, and this step relinks it
+  # with the native compiler into the Mach-O dylib the loader expects, under the
+  # names the Makefile defines for Darwin.
+  postBuild = lib.optionalString stdenv.hostPlatform.isDarwin ''
+    abi_version="$(sed -n 's/^ABI_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | head -n1)"
+    : "''${abi_version:=5}"
+
+    cc -fPIC -DABI_VERSION="$abi_version" -shared \
+      -o "libkrunfw.$abi_version.dylib" kernel.c
+    install_name_tool -id "libkrunfw.$abi_version.dylib" "libkrunfw.$abi_version.dylib"
+  '';
+
+  postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''
+    abi_version="$(sed -n 's/^ABI_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | head -n1)"
+    : "''${abi_version:=5}"
+
+    mkdir -p "$out/lib"
+    install -m 755 "libkrunfw.$abi_version.dylib" "$out/lib/"
+    ln -sf "libkrunfw.$abi_version.dylib" "$out/lib/libkrunfw.dylib"
+  '';
+
   # Fixes https://github.com/containers/libkrunfw/issues/55
   env = lib.optionalAttrs stdenv.targetPlatform.isAarch64 {
     NIX_CFLAGS_COMPILE = "-march=armv8-a+crypto";
