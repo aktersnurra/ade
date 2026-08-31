@@ -22,9 +22,21 @@ assert lib.elem variant [
 ];
 
 let
-  linuxCrossCc = if stdenv.hostPlatform.isAarch64
-    then pkgsCross.aarch64-multiplatform.stdenv.cc
-    else pkgsCross.gnu64.stdenv.cc;
+  # Upstream builds the guest kernel with Debian's GCC 12.2.0 (visible in the
+  # published library's "Linux version" banner). Nixpkgs' default cross compiler
+  # is GCC 15.3.0, three major versions newer, which produced a 1.5 MB larger
+  # kernel that boots but never reaches init.
+  #
+  # GCC 12 has been removed from nixpkgs, so 13 is the closest available and
+  # the nearest match to what upstream actually ships.
+  crossPkgs = if stdenv.hostPlatform.isAarch64
+    then pkgsCross.aarch64-multiplatform
+    else pkgsCross.gnu64;
+
+  linuxCrossCc = crossPkgs.buildPackages.wrapCCWith {
+    cc = crossPkgs.buildPackages.gcc13.cc;
+    bintools = crossPkgs.stdenv.cc.bintools;
+  };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "libkrunfw" + lib.optionalString (variant != null) "-${variant}";
@@ -123,7 +135,13 @@ stdenv.mkDerivation (finalAttrs: {
     install_name_tool -id "libkrunfw.$abi_version.dylib" "libkrunfw.$abi_version.dylib"
   '';
 
-  postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''
+  # Keep the resolved kernel configuration so a build can be compared against
+  # upstream's. `make olddefconfig` fills in every option the shipped config
+  # does not pin, and those defaults are what differ between build hosts.
+  postInstall = ''
+    mkdir -p "$out/share/libkrunfw"
+    cp linux-*/.config "$out/share/libkrunfw/kernel.config" || true
+  '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
     abi_version="$(sed -n 's/^ABI_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | head -n1)"
     : "''${abi_version:=5}"
 

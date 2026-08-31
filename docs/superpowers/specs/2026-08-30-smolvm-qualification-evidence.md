@@ -207,43 +207,42 @@ relocation on `seccomp_syscall_resolve_name`. A build assertion now fails if
 Verified with upstream's libraries: a VM boots on ADE's rootfs, pulls an image
 and runs a container reporting `Linux aarch64`, Alpine 3.24.1, pid 1 = `init`.
 
-### Remaining defect: ADE's libkrunfw kernel differs from upstream's
+### Root cause: the guest kernel is built with the wrong GCC
 
-With ADE's own libkrun + libkrunfw, the guest kernel boots and reaches
+The kernel's own version banner names the compiler, and the two builds differ:
 
 ```
-[    0.230127] Memory Limit: none
+upstream: Linux version 6.12.95 (root@libkrunfw) (gcc (Debian 12.2.0-14+deb12u1) 12.2.0, ...
+ADE:      Linux version 6.12.95 (root@libkrunfw) (aarch64-unknown-linux-gnu-gcc (GCC) 15.3.0, ...
 ```
 
-then the boot process exits with code 0 and the agent never becomes ready. That
-is the last kernel message before init, so the kernel starts and init does not.
+Upstream compiles the guest kernel with **Debian GCC 12.2.0**. Nixpkgs' default
+aarch64 cross compiler is **GCC 15.3.0** — three major versions newer. That
+accounts for the 1.5 MB payload difference and for a kernel that boots but
+never reaches init.
 
-What has been ruled out:
+The kernel configuration was ruled out along the way. Resolving
+`config-libkrunfw_aarch64` with `make olddefconfig` adds only 19 entries, all
+either compiler-identification symbols (`CONFIG_GCC_VERSION`,
+`CONFIG_CC_VERSION_TEXT`, `CONFIG_RUSTC_*`) or ordinary dependency closures
+(`CONFIG_DST_CACHE`, `CONFIG_FIB_RULES`, `CONFIG_GRO_CELLS`). `CONFIG_LSM`
+looked alarming because it lists `lockdown` and `ipe`, but neither module is
+compiled in — the string is only an ordering hint, not an enablement.
 
-- **libkrun API.** Both libraries export the same 61 symbols.
-- **libkrun features.** Upstream additionally links `libvirglrenderer` (GPU),
-  but GPU is opt-in per machine, `ensure_gpu_runtime` is a no-op on macOS, and a
-  missing `krun_set_gpu_options2` produces an explicit error rather than a
-  silent exit.
-- **Kernel version.** Both embed `Linux version 6.12.95`.
-- **Kernel patches.** All 121 upstream patches apply cleanly, including
-  `0001-krunfw-Don-t-panic-when-init-dies`.
-- **Kernel config file.** The build uses `config-libkrunfw_aarch64` with
-  `ARCH=arm64`, as upstream's Makefile intends.
+The shipped config also records `CONFIG_CC_VERSION_TEXT="gcc (GCC) 16.1.1 ...
+(Red Hat 16.1.1-1)"`, so upstream generates that file on a Linux host and
+compiles the shipped artifact with Debian's GCC 12 — neither matches a macOS
+cross build.
 
-What is measurably different: the embedded kernel payload is **14,942,209
-bytes** against upstream's **13,369,345** — 1.5 MB larger, from the same source
-and version. Both libraries export the same three symbols
-(`krunfw_get_kernel`, `krunfw_get_version`, `KERNEL_BUNDLE`).
+### Fix in progress
 
-A 1.5 MB delta from an identical config file points at `make olddefconfig`,
-which fills in options the shipped config does not pin. Upstream builds the
-macOS artifact through `build_on_krunvm.sh` (inside a Linux VM), while this
-build cross-compiles with `OS=Linux` forced on a macOS host; the two can
-plausibly resolve those defaults differently.
+`nix/libkrunfw.nix` now pins the cross compiler to GCC 13, the closest version
+nixpkgs still carries: GCC 12 was removed as unmaintained. GCC 13 is not in the
+binary cache, so the build bootstraps the compiler from source before the
+kernel, which takes considerably longer than previous rounds.
 
-Next diagnostic: extract the final `.config` from both builds and diff them.
-That names the differing options directly instead of inferring from size. The
-practical alternative is to keep using upstream's published `libkrunfw`, which
-is already known to work with ADE's binary and rootfs, and treat a fully
-self-built libkrunfw as a separate goal.
+If GCC 13 still does not produce a bootable kernel, the difference is narrower
+than a compiler generation and the remaining options are to build libkrunfw the
+way upstream does (inside a Linux VM, via `build_on_krunvm.sh`), or to consume
+upstream's published `libkrunfw` and treat a self-built one as a separate goal.
+Upstream's library is already proven to work with ADE's own binary and rootfs.
