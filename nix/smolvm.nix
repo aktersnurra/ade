@@ -56,10 +56,6 @@ rustPlatform.buildRustPackage {
     lockFile = "${src}/Cargo.lock";
   };
 
-  # smolvm 1.13.1 assumes a libkrun where the implicit vsock is gone, but the
-  # libkrun revision its own flake pins still creates one, so krun_add_vsock
-  # always fails with -EEXIST. See the patch header for the full analysis.
-  patches = [ ./patches/smolvm-disable-implicit-vsock.patch ];
 
   nativeBuildInputs = [ pkg-config makeWrapper ];
 
@@ -93,9 +89,23 @@ rustPlatform.buildRustPackage {
     # "libkrun.1.dylib". dyld never resolves a bare name through rpath, so the
     # reference itself must be rewritten to the pinned library's absolute path.
     ${lib.optionalString (libkrun != null) ''
-      install_name_tool \
-        -change libkrun.1.dylib "${lib.getLib libkrun}/lib/libkrun.1.dylib" \
-        "$real"
+      # The recorded name carries libkrun's ABI version, which changes across
+      # revisions (1.x -> 2.x), so both the reference and the target are read
+      # from the binary and the library directory rather than hardcoded.
+      krun_ref="$(otool -L "$real" | awk '$1 ~ /^libkrun\./ { print $1; exit }')"
+      krun_lib="${lib.getLib libkrun}/lib/$krun_ref"
+
+      if [ -z "$krun_ref" ]; then
+        echo "no bare libkrun reference found in $real" >&2
+        exit 1
+      fi
+      if [ ! -e "$krun_lib" ]; then
+        echo "libkrun does not provide $krun_ref" >&2
+        ls "${lib.getLib libkrun}/lib" >&2
+        exit 1
+      fi
+
+      install_name_tool -change "$krun_ref" "$krun_lib" "$real"
     ''}
 
     # Signing must follow install_name_tool, which invalidates any existing

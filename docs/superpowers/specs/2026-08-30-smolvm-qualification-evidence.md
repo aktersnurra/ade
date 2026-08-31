@@ -94,38 +94,114 @@ Boot advanced through four distinct defects, each fixed:
 
 Disks now format, config is written, and the boot subprocess spawns.
 
-## Blocked: krun_start_enter returns EINVAL
+## Pins corrected (2026-08-31)
+
+Upstream's `flake.nix` and its git submodules disagreed, and the submodules are
+authoritative: `scripts/check-libkrun-provenance.sh` asserts the shipped library
+matches `HEAD:libkrun` precisely to prevent shipping a stale libkrun. The flake
+inputs are not covered by that check and had drifted by three months.
+
+At the approved SmolVM revision `62f5f04` the submodules record:
+
+| Component | Submodule (used now) | Upstream flake (stale) |
+| --- | --- | --- |
+| libkrun | `2dfbd6fb` (2.0.0-dev) | `98163265` (1.17.3) |
+| libkrunfw | `8f130764` (5.5.0) | `516ceece` (5.4.0) |
+
+This resolved the vsock defect at its source: libkrun `2dfbd6fb` removes
+`krun_disable_implicit_vsock` and defaults `VsockConfig` to `Disabled`, exactly
+as smolvm 1.13.1 assumes. The local vsock patch was dropped.
+
+Knock-on changes handled: kernel 6.12.95, and a libkrun ABI bump from 1 to 2.
+The smolvm library reference is now read from the binary rather than
+hardcoding `libkrun.1.dylib`, so a future ABI change fails at build time
+instead of at boot.
+
+## Blocked: vCPU threads panic inside libkrun
+
+Correcting the pins did **not** resolve the boot failure, so the earlier
+hypothesis that smolvm and libkrun were merely out of step was incomplete.
+
+`krun_start_enter` still returns `EINVAL`, but that is a downstream symptom.
+`agent-startup-error.log` shows the real failure:
 
 ```
-start vm: krun_start_enter returned: -22 (EINVAL — libkrun rejected the VM
-configuration)
+thread 'fc_vcpu 0' panicked at src/vmm/src/macos/vstate.rs:696:14:
+failed to send Exited status: "SendError(..)"
+
+thread 'fc_vcpu 1' panicked at src/vmm/src/macos/vstate.rs:525:79:
+called `Result::unwrap()` on an `Err` value: RecvError
 ```
 
-The subprocess dies inside `krun_start_enter` about 140 ms after spawning, on a
-freshly created machine as well as a reused one, so it is not stale disk state.
+vCPU 1 blocks on `boot_receiver.recv()` — the PSCI `CpuOn` handshake — and gets
+`RecvError` because vCPU 0 has already exited. So vCPU 0 dies first and the
+rest is cascade. `agent-console.log` is empty: the guest never executed a
+single instruction.
 
-All 13 symbols smolvm loads unconditionally are exported by the pinned libkrun,
-as are every optional symbol it probes (`krun_add_virtiofs3`,
-`krun_create_disk_overlay`, `krun_set_snapshot`, and the rest). So this is a
-semantic mismatch in the VM configuration, not a missing API.
+Ruled out:
 
-That is consistent with the vsock defect: smolvm 1.13.1 appears to target a
-newer libkrun than the revision its own flake pins. The vsock case was
-recoverable because the older API still existed under a name smolvm no longer
-called; an `EINVAL` from `krun_start_enter` gives no such handle without
-identifying which specific configuration call libkrun rejects.
+- **Entitlements.** The installed binary carries
+  `com.apple.security.hypervisor`, `allow-jit` and
+  `disable-library-validation`, and `codesign -v` passes.
+- **Stale disks.** Reproduced on freshly created machines.
+- **Missing APIs.** Every symbol smolvm loads, required and optional, is
+  exported by libkrun 2.0.0.
+- **Pin drift.** Now aligned with the submodules upstream treats as
+  authoritative.
 
-### Options
+### Isolated: upstream's own release fails identically
 
-1. Instrument the boot subprocess to log each `krun_*` call and its return
-   value, isolating the rejected configuration. Most precise; needs another
-   full rebuild per iteration (~2 h each).
-2. Move libkrun to the revision smolvm 1.13.1 actually expects. Likely resolves
-   both this and the vsock defect at the source, but changes the qualified
-   runtime's provenance and requires re-auditing the pin.
-3. Pin an older smolvm that matches the current libkrun revision. Preserves the
-   audited libkrun but abandons the approved SmolVM version.
+The upstream-published release was run as a control: `smolvm-1.13.1-darwin-arm64
+.tar.gz`, checksum `da877a29...` verified against upstream's `checksums.sha256`.
+It bundles upstream's binary, their `lib/` (libkrun + libkrunfw), and their
+`agent-rootfs`. Nothing from ADE is involved.
 
-Option 2 is the most likely to be correct, since the evidence points to smolvm
-and libkrun being out of step rather than to a defect in either alone. It is a
-change to the approved pin and therefore a decision for the user.
+It fails with a byte-identical signature:
+
+```
+thread 'fc_vcpu 0' panicked at src/vmm/src/macos/vstate.rs:696:14
+thread 'fc_vcpu 1' panicked at src/vmm/src/macos/vstate.rs:525:79
+krun_start_enter returned: -22
+```
+
+`agent-console.log` is empty in both cases: no guest instruction ever executes.
+
+Upstream's `smolvm-bin` carries `com.apple.security.hypervisor`, `allow-jit` and
+`disable-library-validation`, and `codesign -v` passes.
+
+**Conclusion: SmolVM 1.13.1 does not boot a VM on this host.** The failure is in
+the runtime on this macOS/hardware combination, not in ADE's packaging. Every
+component ADE builds — the source-built binary, the pinned libkrun/libkrunfw,
+the agent rootfs — reproduces exactly what upstream's own artifact does.
+
+Host: macOS 26.5.2, Apple M1.
+
+This also retroactively validates the four defects fixed earlier. They were real
+and had to be fixed to reach this point, but none of them was the cause: ADE's
+build now behaves indistinguishably from upstream's.
+
+### What this means for the migration
+
+The ADE host controller does not depend on this. It is complete and tested
+against a fake runtime: 127 tests covering declarations, the process boundary,
+the SmolVM adapter, lifecycle convergence, archive validation, the reimage
+journal, destroy authorization, and credential handling.
+
+What is blocked is anything requiring a booted VM: the runtime qualification
+suite, the workstation image build, and therefore Task 14's removal of the
+Microsandbox surface.
+
+Options, none of which ADE can decide on its own:
+
+1. **Report upstream.** The reproducer is minimal and uses only their published
+   artifact: create a machine, start it, observe the vCPU panic. This is the
+   cheapest path and the most likely to produce a real fix.
+2. **Try another SmolVM version.** 1.13.1 is the approved pin, but the defect is
+   in the runtime, so a different release may simply work. Changes the approved
+   pin.
+3. **Try another host.** A different macOS version or an Apple Silicon
+   generation other than M1 would establish how narrow the failure is.
+
+Until a VM boots somewhere, the Microsandbox baseline must stay: the plan's
+gate says the SmolVM suite has to pass before that surface is removed, and it
+cannot pass.

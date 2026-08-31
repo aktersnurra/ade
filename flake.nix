@@ -4,17 +4,30 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Pinned to the exact revisions the approved SmolVM commit declares. The
-    # macOS build weak-links libkrun, so the host CLI cannot be linked without
-    # them, and the published release tarballs are not an acceptable substitute:
-    # they carry no signatures or provenance attestations.
+    # Pinned to the submodule commits recorded at the approved SmolVM revision
+    # (`git ls-tree 62f5f04 libkrun libkrunfw`), NOT to the revisions in
+    # upstream's own flake.nix, which are stale relative to those submodules.
+    #
+    # Upstream treats the submodules as authoritative: scripts/check-libkrun-
+    # provenance.sh asserts the shipped library matches `HEAD:libkrun`
+    # specifically to prevent shipping a stale libkrun. The flake inputs are not
+    # covered by that check and had drifted.
+    #
+    # The drift is not cosmetic. libkrun 98163265 still defaulted VsockConfig to
+    # Implicit and exported krun_disable_implicit_vsock; 2dfbd6fb removes that
+    # symbol and defaults to Disabled, which is precisely what smolvm 1.13.1
+    # assumes when it calls krun_add_vsock directly.
+    #
+    # The macOS build weak-links libkrun, so the host CLI cannot be linked
+    # without these. The published release tarballs are not an acceptable
+    # substitute: they carry no signatures or provenance attestations.
     libkrun-src = {
-      url = "github:smol-machines/libkrun/98163265197caa24a789699f16a68b98e917b65b";
+      url = "github:smol-machines/libkrun/2dfbd6fb6a1acf50413b64009b90fed8c589c9c3";
       flake = false;
     };
 
     libkrunfw-src = {
-      url = "github:smol-machines/libkrunfw/516ceece6aed60ccc84ac8faa459885062e39400";
+      url = "github:smol-machines/libkrunfw/8f1307644bdcb95fe1343bf0d6ccf30aa22f1549";
       flake = false;
     };
   };

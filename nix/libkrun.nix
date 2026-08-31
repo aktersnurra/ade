@@ -51,7 +51,7 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "libkrun"
     + lib.optionalString (variant != null) "-${variant}"
     + lib.optionalString withAwsNitro "-awsnitro";
-  version = "1.17.3";
+  version = "2.0.0-dev";
 
   inherit src;
 
@@ -62,7 +62,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   cargoDeps = rustPlatform.fetchCargoVendor {
     inherit (finalAttrs) src;
-    hash = "sha256-b6Rk6ljpHNKwVD7r/NhppGE1TLKRXo8MxZNAszcOH5I=";
+    hash = "sha256-1B5+G6JdPL9wr7EzlrgHpbGcRFSz0btu+ydawkMvE2c=";
   };
 
   postPatch = ''
