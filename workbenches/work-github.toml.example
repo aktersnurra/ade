@@ -1,0 +1,83 @@
+# Example: a work workbench with GitHub App credentials.
+#
+# Copy to work.toml's [credentials.github] table and fill in your own values.
+# This file contains no real identifiers.
+#
+# Creating the App (once, in GitHub -> Settings -> Developer settings ->
+# GitHub Apps):
+#
+#   1. New GitHub App, owned by your account or the org owning the repos.
+#
+#      Homepage URL is required by the form but is never fetched or validated.
+#      For a private App any URL you control does, such as your GitHub profile.
+#      Leave Callback URL blank: it is only for OAuth user-authorization, which
+#      ADE does not use. Uncheck the webhook's "Active" box, or GitHub will
+#      POST events at an endpoint that does not exist and fill the App's
+#      settings page with delivery failures.
+#   2. Repository permissions -- grant only what agents actually need. For a
+#      coding workbench that is usually:
+#        Contents:      Read and write
+#        Pull requests: Read and write
+#        Metadata:      Read-only (selected automatically)
+#   3. Install it on *selected repositories*, never "All repositories".
+#   4. Generate a private key and keep the .pem outside this repository.
+#
+# The App ID is on the App's settings page. The installation ID is the trailing
+# number in the URL when you open the installation's settings.
+#
+# The permissions below are requested per token: an installation token can be
+# narrower than the App's grant, never broader. Every agent in this workbench
+# shares this authority, because a workbench is one security principal.
+
+name = "work"
+image = "ade-nix-workstation@sha256:d8db3517d2c8c667b130531741dfbf7a3e71a508442465c585af27de1b0e9234"
+smolfile = "smolfiles/workstation.Smolfile"
+
+[resources]
+cpus = 6
+memory_mib = 12288
+overlay_gib = 32
+workspace_gib = 256
+
+[network]
+posture = "allowlisted"
+hosts = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "objects.githubusercontent.com",
+]
+cidrs = []
+
+[services]
+docker = true
+herdr = true
+
+[ssh]
+mode = "dedicated_agent"
+key_ref = "keychain:ade-work-ssh"
+
+[backup]
+directory = "~/ade-backups/work"
+keep = 5
+
+[credentials.github]
+app_id = "REPLACE-WITH-APP-ID"
+installation_id = "REPLACE-WITH-INSTALLATION-ID"
+
+# The key stays on the host and never enters the guest; only the derived,
+# one-hour installation token is installed into guest tmpfs.
+private_key_path = "~/.config/ade/REPLACE-WITH-KEY-NAME.pem"
+
+# Required. Without it the token would reach every repository the App is
+# installed on.
+repositories = [
+  "REPLACE-ME/first-repo",
+  "REPLACE-ME/second-repo",
+]
+
+# Required. Without it the token would carry the App's full installation
+# authority.
+[credentials.github.permissions]
+contents = "write"
+pull_requests = "write"

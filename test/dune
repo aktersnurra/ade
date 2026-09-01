@@ -91,3 +91,8 @@
  (name test_provider)
  (modules test_provider)
  (libraries ade alcotest))
+
+(test
+ (name test_github_credential)
+ (modules test_github_credential)
+ (libraries ade alcotest))
