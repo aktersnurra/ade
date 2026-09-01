@@ -24,6 +24,7 @@ type error =
   | Invalid_config of string
   | Exchange_failed of { status : int; body : string }
   | Malformed_response of string
+  | Signing_failed of string
 
 val describe_error : error -> string
 
@@ -44,6 +45,26 @@ val exchange :
   post:http_post -> config -> jwt:string -> now:float ->
   (Provider.minted, error) result
 (** Exchange a signed App JWT for an installation token. *)
+
+val base64url : string -> string
+(** JWT uses base64url without padding, not standard base64. *)
+
+val signing_input : config -> now:float -> string
+(** The header and payload, joined and encoded. This is the exact byte string
+    that gets signed; the signature is appended to it to form the JWT. *)
+
+type signer = string -> (string, string) result
+(** Sign the input with the App's RSA key, returning raw signature bytes.
+    Abstract so the flow is testable without a real key. *)
+
+val openssl_signer :
+  runner:Process_runner.t -> openssl:string -> private_key_path:string -> signer
+(** Sign via openssl at the existing process boundary. ADE has no RSA
+    implementation of its own, and this avoids adding a crypto dependency for
+    one operation. The key is read by openssl from its path; it is never passed
+    as an argument and never enters a log. *)
+
+val sign_jwt : signer:signer -> config -> now:float -> (string, error) result
 
 val jwt_claims : config -> now:float -> string
 (** The JWT payload, exposed for tests. GitHub requires iat/exp within ten

@@ -111,6 +111,63 @@ let an_unreadable_expiry_falls_back_to_one_hour () =
       Alcotest.(check (float 1.0)) "one hour" (now +. 3600.0) minted.Provider.expires_at
   | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
 
+
+(* base64url, not standard base64: GitHub rejects a JWT containing '+', '/' or
+   '='. Vectors from RFC 4648, plus a case that exercises the substituted
+   alphabet. *)
+let base64url_matches_the_spec () =
+  List.iter
+    (fun (input, expected) ->
+      Alcotest.(check string) (Printf.sprintf "%S" input) expected
+        (Github_credential.base64url input))
+    [
+      ("", "");
+      ("f", "Zg");
+      ("fo", "Zm8");
+      ("foo", "Zm9v");
+      ("foob", "Zm9vYg");
+      ("fooba", "Zm9vYmE");
+      ("foobar", "Zm9vYmFy");
+      (* 0xfb 0xff encodes to '+' and '/' under standard base64. *)
+      ("\251\255", "-_8");
+    ]
+
+let base64url_never_emits_padding_or_unsafe_characters () =
+  for length = 0 to 32 do
+    let input = String.init length (fun i -> Char.chr ((i * 37) land 0xff)) in
+    let encoded = Github_credential.base64url input in
+    String.iter
+      (fun c ->
+        if c = '=' || c = '+' || c = '/' then
+          Alcotest.failf "encoded output contains %c for length %d" c length)
+      encoded
+  done
+
+let the_signing_input_has_two_dot_separated_segments () =
+  let input = Github_credential.signing_input (config ()) ~now in
+  match String.split_on_char '.' input with
+  | [ header; payload ] ->
+      Alcotest.(check bool) "header present" true (String.length header > 0);
+      Alcotest.(check bool) "payload present" true (String.length payload > 0)
+  | parts -> Alcotest.failf "expected two segments, got %d" (List.length parts)
+
+let a_signed_jwt_has_three_segments () =
+  let signer _ = Ok "raw-signature-bytes" in
+  match Github_credential.sign_jwt ~signer (config ()) ~now with
+  | Error e -> Alcotest.failf "sign: %s" (Github_credential.describe_error e)
+  | Ok jwt ->
+      Alcotest.(check int) "segments" 3 (List.length (String.split_on_char '.' jwt))
+
+(* A signing failure must surface rather than produce a malformed token that
+   GitHub would reject with a less useful error. *)
+let a_signing_failure_is_reported () =
+  let signer _ = Error "no such key" in
+  match Github_credential.sign_jwt ~signer (config ()) ~now with
+  | Error (Github_credential.Signing_failed reason) ->
+      Alcotest.(check bool) "keeps the cause" true (contains reason "no such key")
+  | Error e -> Alcotest.failf "unexpected: %s" (Github_credential.describe_error e)
+  | Ok _ -> Alcotest.fail "expected a signing failure to be reported"
+
 let () =
   Alcotest.run "github_credential"
     [ ( "configuration",
@@ -126,5 +183,13 @@ let () =
           Alcotest.test_case "refusal" `Quick a_refused_exchange_is_reported;
           Alcotest.test_case "malformed" `Quick a_malformed_response_is_reported;
           Alcotest.test_case "expiry fallback" `Quick
-            an_unreadable_expiry_falls_back_to_one_hour ] )
+            an_unreadable_expiry_falls_back_to_one_hour ] );
+      ( "encoding",
+        [ Alcotest.test_case "vectors" `Quick base64url_matches_the_spec;
+          Alcotest.test_case "url safe" `Quick
+            base64url_never_emits_padding_or_unsafe_characters ] );
+      ( "signing",
+        [ Alcotest.test_case "input" `Quick the_signing_input_has_two_dot_separated_segments;
+          Alcotest.test_case "three segments" `Quick a_signed_jwt_has_three_segments;
+          Alcotest.test_case "failure" `Quick a_signing_failure_is_reported ] )
     ]

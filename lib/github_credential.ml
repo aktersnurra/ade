@@ -11,6 +11,7 @@ type error =
   | Invalid_config of string
   | Exchange_failed of { status : int; body : string }
   | Malformed_response of string
+  | Signing_failed of string
 
 let describe_error = function
   | Missing_private_key path -> "the GitHub App private key is not readable at " ^ path
@@ -19,6 +20,7 @@ let describe_error = function
       Printf.sprintf "GitHub refused the token exchange with status %d: %s" status
         (String.trim body)
   | Malformed_response reason -> "unreadable GitHub response: " ^ reason
+  | Signing_failed reason -> "could not sign the GitHub App JWT: " ^ reason
 
 let ( let* ) = Result.bind
 
@@ -105,6 +107,61 @@ let token_url config =
 let jwt_claims config ~now =
   Printf.sprintf {|{"iat":%.0f,"exp":%.0f,"iss":"%s"}|} (now -. 60.0) (now +. 540.0)
     config.app_id
+
+(* JWT uses base64url without padding: '+' and '/' become '-' and '_', and the
+   '=' padding is dropped. Standard base64 would be rejected. *)
+let base64url raw =
+  let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" in
+  let buffer = Buffer.create ((String.length raw * 4 / 3) + 4) in
+  let length = String.length raw in
+  let rec encode i =
+    if i >= length then ()
+    else begin
+      let b0 = Char.code raw.[i] in
+      let b1 = if i + 1 < length then Char.code raw.[i + 1] else 0 in
+      let b2 = if i + 2 < length then Char.code raw.[i + 2] else 0 in
+      Buffer.add_char buffer alphabet.[b0 lsr 2];
+      Buffer.add_char buffer alphabet.[((b0 land 0x03) lsl 4) lor (b1 lsr 4)];
+      if i + 1 < length then
+        Buffer.add_char buffer alphabet.[((b1 land 0x0f) lsl 2) lor (b2 lsr 6)];
+      if i + 2 < length then Buffer.add_char buffer alphabet.[b2 land 0x3f];
+      encode (i + 3)
+    end
+  in
+  encode 0;
+  Buffer.contents buffer
+
+(* GitHub requires RS256. *)
+let jwt_header = {|{"alg":"RS256","typ":"JWT"}|}
+
+let signing_input config ~now =
+  base64url jwt_header ^ "." ^ base64url (jwt_claims config ~now)
+
+type signer = string -> (string, string) result
+
+let openssl_signer ~runner ~openssl ~private_key_path input =
+  (* The key is read by openssl from its path and the input arrives on stdin,
+     so neither appears in argv where another local process could read it. *)
+  let request =
+    {
+      Process_runner.executable = openssl;
+      argv = [ "dgst"; "-sha256"; "-sign"; private_key_path ];
+      env = [ ("PATH", try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin") ];
+      stdin = Some input;
+      stdio = Process_runner.Capture;
+    }
+  in
+  match runner request with
+  | Error error -> Error (Ade_error.to_string error)
+  | Ok { Process_runner.status = 0; stdout; _ } when stdout <> "" -> Ok stdout
+  | Ok { Process_runner.status; stderr; _ } ->
+      Error (Printf.sprintf "openssl exited with %d: %s" status (String.trim stderr))
+
+let sign_jwt ~signer config ~now =
+  let input = signing_input config ~now in
+  match signer input with
+  | Error reason -> Error (Signing_failed reason)
+  | Ok signature -> Ok (input ^ "." ^ base64url signature)
 
 (* GitHub returns an RFC 3339 expiry. Parsing only the fields needed keeps this
    free of a date library. *)
