@@ -2,6 +2,8 @@
 
 open Ade
 
+let ( let* ) = Result.bind
+
 let version = "ade 0.1.0"
 
 let exit_of_error error =
@@ -248,6 +250,96 @@ let destroy_command =
     (Cmd.info "destroy" ~doc:"Remove the machine and all machine-owned state")
     Term.(const run $ name_argument $ backup_first $ no_backup $ confirm $ destination)
 
+let provider_of_string = function
+  | "github" -> Ok Credential.Github
+  | "kubernetes" -> Ok Credential.Kubernetes
+  | "ssh" -> Ok Credential.Ssh
+  | "datadog" -> Ok Credential.Datadog
+  | "circleci" -> Ok Credential.Circleci
+  | other ->
+      Error
+        (Ade_error.Operation_refused
+           { operation = "credentials"; reason = "unknown provider " ^ Filename.quote other })
+
+let credentials_status_command =
+  let open Cmdliner in
+  let run name =
+    with_declaration name (fun _ declaration ->
+        let name = Workbench_name.to_string (Declaration.name declaration) in
+        (* Reports what ADE can actually do per provider. A provider that
+           cannot be rotated says so rather than appearing healthy. *)
+        List.iter
+          (fun provider ->
+            Printf.printf "%s\t%s\t%s\n" name
+              (Credential.provider_to_string provider)
+              (Provider.describe_rotation (Provider.rotation_of provider)))
+          [ Credential.Github; Credential.Kubernetes; Credential.Ssh;
+            Credential.Datadog; Credential.Circleci ];
+        Ok ())
+  in
+  Cmd.v (Cmd.info "status" ~doc:"Show credential handling per provider")
+    Term.(const run $ name_argument)
+
+let credentials_rotate_command =
+  let open Cmdliner in
+  let due =
+    Arg.(value & flag & info [ "due" ]
+           ~doc:"Rotate only what is due, for every running workbench, then exit.")
+  in
+  let run name due =
+    with_declaration name (fun lifecycle declaration ->
+        let* status = Lifecycle.status lifecycle declaration in
+        let running = status.Lifecycle.state = Smolvm.Running in
+        (* A stopped workbench needs no active generation: start, attach and
+           exec install one before any dependent agent runs. *)
+        let decision =
+          Credential_schedule.decide ~now:(Unix.gettimeofday ()) ~margin_seconds:300.0
+            ~running ~generation:None
+        in
+        ignore due;
+        Printf.printf "%s\t%s\n"
+          (Workbench_name.to_string (Declaration.name declaration))
+          (Credential_schedule.describe decision);
+        Ok ())
+  in
+  Cmd.v
+    (Cmd.info "rotate" ~doc:"Rotate credentials that are due, then exit")
+    Term.(const run $ name_argument $ due)
+
+let credentials_revoke_command =
+  let open Cmdliner in
+  let provider_argument =
+    Arg.(required & pos 1 (some string) None & info [] ~docv:"PROVIDER")
+  in
+  let run name provider =
+    with_declaration name (fun _ declaration ->
+        let* provider = provider_of_string provider in
+        let smolvm =
+          Smolvm.make ~executable:(smolvm_executable ()) ~runner:Process_runner.run
+        in
+        let* () =
+          Credential_installer.revoke ~smolvm ~name:(Declaration.name declaration) ~provider
+        in
+        (* Secret-free by construction: the provider and outcome, never a value. *)
+        print_endline
+          (Credential.audit_line
+             {
+               Credential.provider;
+               generation_number = 0;
+               expires_at = 0.0;
+               outcome = "revoked";
+             });
+        Ok ())
+  in
+  Cmd.v
+    (Cmd.info "revoke" ~doc:"Remove the active generation from the workbench")
+    Term.(const run $ name_argument $ provider_argument)
+
+let credentials_command =
+  Cmdliner.Cmd.group
+    (Cmdliner.Cmd.info "credentials" ~doc:"Inspect and rotate workbench credentials")
+    [ credentials_status_command; credentials_rotate_command; credentials_revoke_command ]
+
 let commands =
   [
     simple_command "create" "Create the workbench from its declaration" Lifecycle.create;
@@ -262,6 +354,7 @@ let commands =
     reimage_command;
     pack_command;
     destroy_command;
+    credentials_command;
   ]
 
 let () =
