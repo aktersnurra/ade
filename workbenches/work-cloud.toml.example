@@ -5,7 +5,7 @@
 # account identifiers, project names, or secrets.
 
 name = "work-cloud"
-image = "docker.io/library/ade-workstation@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+image = "ade-nix-workstation@sha256:d8db3517d2c8c667b130531741dfbf7a3e71a508442465c585af27de1b0e9234"
 smolfile = "smolfiles/workstation.Smolfile"
 
 [resources]

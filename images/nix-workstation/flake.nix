@@ -9,6 +9,22 @@
       pkgs = import nixpkgs { inherit system; };
       workstationPackages = import ./packages.nix { inherit pkgs; };
 
+      # findlib only searches the paths baked into findlib.conf, which name
+      # ocaml and findlib's own store paths. Every other OCaml library lives in
+      # its own store path, so without OCAMLPATH `ocamlfind list` finds nothing
+      # and dune cannot resolve a single dependency.
+      ocamlPackages = pkgs.ocaml-ng.ocamlPackages_5_5;
+
+      # The search path must cover the transitive closure, not just the
+      # packages named directly: otoml needs uutf and menhirLib, and a missing
+      # transitive dependency fails the build rather than the library listing.
+      ocamlClosure = pkgs.lib.closePropagation
+        (builtins.filter (p: p ? outPath) workstationPackages);
+
+      ocamlPath = pkgs.lib.makeSearchPath
+        "lib/ocaml/${ocamlPackages.ocaml.version}/site-lib"
+        ocamlClosure;
+
       packagesRoot = pkgs.buildEnv {
         name = "ade-workstation-root";
         paths = workstationPackages;
@@ -38,6 +54,7 @@
             Cmd = [ "/bin/bash" ];
             Env = [
               "PATH=/bin"
+              "OCAMLPATH=${ocamlPath}"
               "HOME=/root"
               "USER=root"
               "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"

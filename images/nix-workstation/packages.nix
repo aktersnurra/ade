@@ -12,6 +12,7 @@ let
   # that project's own flake or opam switch.
   ocamlToolchain = with ocamlPackages; [
     ocaml
+    dune_3
     findlib
     ocaml-lsp
     ocamlformat
@@ -34,7 +35,6 @@ with pkgs; ocamlToolchain ++ [
   dockerTools.binSh
   dockerTools.fakeNss
   dockerTools.usrBinEnv
-  dune_3
   fd
   file
   findutils
