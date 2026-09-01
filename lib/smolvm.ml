@@ -127,6 +127,29 @@ let stop t name =
 let delete t name =
   succeeded t [ "machine"; "delete"; "--name"; Workbench_name.to_string name ]
 
+let attach_volume t name ~host ~guest ~read_only =
+  let spec = host ^ ":" ^ guest ^ if read_only then ":ro" else "" in
+  succeeded t
+    [ "machine"; "update"; "--name"; Workbench_name.to_string name; "--volume"; spec ]
+
+let detach_volume t name ~guest =
+  succeeded t
+    [
+      "machine"; "update"; "--name"; Workbench_name.to_string name;
+      "--remove-volume"; guest;
+    ]
+
+let copy_to_guest t name ~source ~destination =
+  succeeded t
+    [
+      "machine"; "cp"; source;
+      Workbench_name.to_string name ^ ":" ^ destination;
+    ]
+
+let pack t name ~output =
+  succeeded t
+    [ "pack"; "create"; "--from-vm"; Workbench_name.to_string name; "--output"; output ]
+
 let exec t name command =
   let argv =
     [ "machine"; "exec"; "--name"; Workbench_name.to_string name ] @ ("--" :: command)

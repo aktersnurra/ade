@@ -5,6 +5,7 @@ type t =
   | Runtime_unavailable of { executable : string }
   | Runtime_failed of { argv : string list; status : int; stderr : string }
   | Runtime_output_invalid of { context : string; reason : string }
+  | Operation_refused of { operation : string; reason : string }
 
 (* Only the executable and subcommand are rendered. Later arguments may carry
    secret-bearing values and never reach diagnostics. *)
@@ -26,3 +27,4 @@ let to_string = function
         (String.trim stderr)
   | Runtime_output_invalid { context; reason } ->
       "unreadable runtime output from " ^ context ^ ": " ^ reason
+  | Operation_refused { operation; reason } -> operation ^ " refused: " ^ reason

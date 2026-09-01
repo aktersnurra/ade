@@ -10,6 +10,9 @@ type t =
   | Runtime_unavailable of { executable : string }
   | Runtime_failed of { argv : string list; status : int; stderr : string }
   | Runtime_output_invalid of { context : string; reason : string }
+  | Operation_refused of { operation : string; reason : string }
+      (** A policy refusal, not a runtime failure: the user must supply
+          something before the operation may proceed. *)
 
 val to_string : t -> string
 (** A single-line, secret-free description suitable for stderr. *)
