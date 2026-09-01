@@ -3,31 +3,44 @@
 # Copy to work.toml's [credentials.github] table and fill in your own values.
 # This file contains no real identifiers.
 #
-# Creating the App (once, in GitHub -> Settings -> Developer settings ->
-# GitHub Apps):
+# Creating the App. The form has around forty permission dropdowns; three of
+# them matter and everything else stays on "No access".
 #
-#   1. New GitHub App, owned by your account or the org owning the repos.
+# GitHub -> Settings -> Developer settings -> GitHub Apps -> New GitHub App
 #
-#      Homepage URL is required by the form but is never fetched or validated.
-#      For a private App any URL you control does, such as your GitHub profile.
-#      Leave Callback URL blank: it is only for OAuth user-authorization, which
-#      ADE does not use. Uncheck the webhook's "Active" box, or GitHub will
-#      POST events at an endpoint that does not exist and fill the App's
-#      settings page with delivery failures.
-#   2. Repository permissions -- grant only what agents actually need. For a
-#      coding workbench that is usually:
-#        Contents:      Read and write
-#        Pull requests: Read and write
-#        Metadata:      Read-only (selected automatically)
-#   3. Install it on *selected repositories*, never "All repositories".
-#   4. Generate a private key and keep the .pem outside this repository.
+#   Name                  anything globally unique, e.g. ade-work
+#   Homepage URL          required by the form, never fetched. Your GitHub
+#                         profile URL is fine.
+#   Callback URL          leave blank. It is only for OAuth user
+#                         authorization, which ADE does not use.
+#   Webhook               uncheck "Active". Otherwise GitHub POSTs events at an
+#                         endpoint that does not exist and the App's settings
+#                         page fills with delivery failures.
 #
-# The App ID is on the App's settings page. The installation ID is the trailing
-# number in the URL when you open the installation's settings.
+#   Repository permissions:
+#     Contents            Read and write   -- read files, push commits
+#     Pull requests       Read and write   -- open and update PRs
+#     Metadata            Read-only        -- selected automatically, mandatory
 #
-# The permissions below are requested per token: an installation token can be
-# narrower than the App's grant, never broader. Every agent in this workbench
-# shares this authority, because a workbench is one security principal.
+#   Leave Actions, Issues, Packages, Administration and the rest at "No
+#   access". Widening later is one dropdown; discovering you over-granted is a
+#   security review.
+#
+#   Where can this App be installed?   Only on this account
+#
+# Then Install App -> Only select repositories. Start with one low-stakes
+# repository; more can be added to the installation later without touching the
+# App itself.
+#
+# Afterwards:
+#   App ID           on the App's General tab
+#   Installation ID  the trailing number in the URL once installed
+#   Private key      "Generate a private key" at the bottom of General; keep
+#                    the .pem outside this repository
+#
+# What you grant here is held by every agent in this workbench: a workbench is
+# one security principal, with no isolation between the agents inside it. So
+# which repositories are installed matters more than the permission list.
 
 name = "work"
 image = "ade-nix-workstation@sha256:d8db3517d2c8c667b130531741dfbf7a3e71a508442465c585af27de1b0e9234"
