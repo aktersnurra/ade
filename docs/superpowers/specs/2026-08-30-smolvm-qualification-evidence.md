@@ -290,9 +290,56 @@ Installed binary SHA-256: `220ef903e2c72a4b805a83c3d30e3953e3b3e59d517ef07f5cee3
   negative result. An earlier revision of this document concluded the runtime
   was broken on this host; the harness was.
 
-### Still open
+## Runtime qualification (2026-09-01)
 
-- The workstation image build (Task 6) and the full runtime qualification suite
-  (Task 13) are now unblocked but not yet run.
-- `workbenches/*.toml` still pin an all-zeros image digest placeholder, which
-  the declaration parser accepts as well-formed but which names no real image.
+`test/qualification/test_runtime.py` runs against a live runtime, 10 tests
+passing. Each asserts a property the design depends on rather than restating
+what the runtime does.
+
+| Area | Verified |
+| --- | --- |
+| Lifecycle | create → start → stop with the expected state at each step; repeated stop is a no-op; an unknown machine reports "not found" |
+| Persistence | `/workspace` survives stop/start; `/run` is wiped by a restart |
+| Network | a sealed machine cannot reach the network; a networked machine resolves DNS and reaches a server |
+| Isolation | machine data stays under the test HOME; the user's `~/.smolvm`, `~/.microsandbox` and Homebrew paths are unchanged |
+
+Two harness constraints are encoded in `test/qualification/runtime.py`, both
+learned from failures that misdirected earlier work:
+
+- **HOME must be short.** The agent socket lives under it and macOS caps
+  `sun_path` at 104 bytes; a `$TMPDIR` path reaches 118 and the VM fails to
+  boot with a vCPU panic that looks like a runtime defect.
+- **`mkfs.ext4` must be on PATH**, since smolvm shells out to it to format
+  disks. The harness finds it in the Nix store when absent.
+
+Two network assertions had to be corrected, and both are worth recording
+because the naive version would have produced a false negative:
+
+- An `https` probe fails at certificate verification: the bare Alpine rootfs
+  ships no CA bundle. That is not an egress failure.
+- An HTTP **403** still proves egress works — DNS resolved, TCP connected, a
+  server replied. Only a timeout or resolution failure means blocked.
+
+### Not yet covered
+
+The design lists these as blocking, and they remain untested:
+
+- secret installation, atomic activation, expiry and reinjection (needs the
+  credential providers, Task 11);
+- reimage with crash injection at every journal boundary, and recovery before
+  and after old-machine deletion;
+- workspace backup and restore above 4 GiB;
+- Docker and a nested container workload;
+- Herdr startup, attachment and multi-agent use;
+- native interactive attachment, streams, signals and stop disconnect;
+- allowlist enforcement per hostname and CIDR, and Docker container egress.
+
+The reimage and backup executors exist and are tested against a fake runtime,
+so the crash-injection work is now possible; it was not before.
+
+### Still open elsewhere
+
+- Credential providers (Task 11): GitHub, Kubernetes and the dedicated SSH
+  agent, plus the tmpfs installer and `credentials status|rotate|revoke`.
+- Microsandbox removal (Task 14), gated on the qualification suite.
+- The libkrun/libkrunfw provenance gap recorded above.
