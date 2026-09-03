@@ -107,3 +107,8 @@
  (modules test_reimage_crash)
  (libraries ade alcotest unix)
  (deps (glob_files %{project_root}/workbenches/*)))
+
+(test
+ (name test_ssh_agent)
+ (modules test_ssh_agent)
+ (libraries ade alcotest))
