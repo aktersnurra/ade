@@ -22,6 +22,15 @@ val delete : t -> Workbench_name.t -> (unit, Ade_error.t) result
 val exec :
   t -> Workbench_name.t -> string list -> (Process_runner.output, Ade_error.t) result
 
+val exec_checked :
+  t -> Workbench_name.t -> string list -> (unit, Ade_error.t) result
+(** Run a guest command and fail on a nonzero exit.
+
+    [exec] deliberately returns the output whatever the status, because a user
+    command that fails is not an ADE error. A maintenance helper is different:
+    if the export or restore helper fails, the transaction must stop rather
+    than continue on the assumption that it worked. *)
+
 val exec_with_stdin :
   t -> Workbench_name.t -> string list -> stdin:string ->
   (Process_runner.output, Ade_error.t) result

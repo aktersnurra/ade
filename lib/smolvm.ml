@@ -156,6 +156,12 @@ let exec t name command =
   in
   t.runner (request t argv)
 
+let exec_checked t name command =
+  let argv =
+    [ "machine"; "exec"; "--name"; Workbench_name.to_string name ] @ ("--" :: command)
+  in
+  succeeded t argv
+
 let exec_with_stdin t name command ~stdin =
   let argv =
     [ "machine"; "exec"; "--name"; Workbench_name.to_string name ] @ ("--" :: command)

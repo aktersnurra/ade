@@ -101,3 +101,9 @@
  (name test_secret)
  (modules test_secret)
  (libraries ade alcotest))
+
+(test
+ (name test_reimage_crash)
+ (modules test_reimage_crash)
+ (libraries ade alcotest unix)
+ (deps (glob_files %{project_root}/workbenches/*)))

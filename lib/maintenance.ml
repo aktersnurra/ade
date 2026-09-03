@@ -46,7 +46,7 @@ let export_workspace smolvm name ~staging =
     Smolvm.attach_volume smolvm name ~host:staging ~guest:export_mount ~read_only:false
   in
   let* () = ensure_started smolvm name in
-  let* _ = Smolvm.exec smolvm name [ export_helper; export_mount ] in
+  let* () = Smolvm.exec_checked smolvm name [ export_helper; export_mount ] in
   let* () = ensure_stopped smolvm name in
   let* () = Smolvm.detach_volume smolvm name ~guest:export_mount in
   Ok (Filename.concat staging archive_name)
@@ -67,7 +67,7 @@ let restore_workspace smolvm name ~staging =
     Smolvm.attach_volume smolvm name ~host:staging ~guest:import_mount ~read_only:true
   in
   let* () = ensure_started smolvm name in
-  let* _ = Smolvm.exec smolvm name [ restore_helper; import_mount ] in
+  let* () = Smolvm.exec_checked smolvm name [ restore_helper; import_mount ] in
   let* () = ensure_stopped smolvm name in
   Smolvm.detach_volume smolvm name ~guest:import_mount
 
