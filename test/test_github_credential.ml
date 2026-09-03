@@ -19,7 +19,8 @@ let config ?(repositories = [ "owner/repo" ]) ?(permissions = [ ("contents", "wr
   {
     Github_credential.app_id = "123456";
     installation_id = "78901234";
-    private_key_path = (match private_key_path with Some p -> p | None -> key_path ());
+    private_key =
+      Secret.file ~path:(match private_key_path with Some p -> p | None -> key_path ());
     repositories;
     permissions;
   }
@@ -43,13 +44,15 @@ let a_config_without_permissions_is_refused () =
   expect_invalid "no permissions"
     (Github_credential.validate (config ~permissions:[] ()))
 
-let a_missing_private_key_is_refused () =
+(* A key reference names a location; whether it resolves is a read-time
+   concern. Validation accepts it, and an unreadable key surfaces at signing
+   with the path named. *)
+let a_key_reference_is_not_resolved_at_validation () =
   match
     Github_credential.validate (config ~private_key_path:"/nonexistent/key.pem" ())
   with
-  | Error (Github_credential.Missing_private_key _) -> ()
+  | Ok () -> ()
   | Error e -> Alcotest.failf "unexpected: %s" (Github_credential.describe_error e)
-  | Ok () -> Alcotest.fail "expected a missing key to be refused"
 
 let a_complete_config_is_accepted () =
   match Github_credential.validate (config ()) with
@@ -173,7 +176,8 @@ let () =
     [ ( "configuration",
         [ Alcotest.test_case "no repositories" `Quick a_config_without_repositories_is_refused;
           Alcotest.test_case "no permissions" `Quick a_config_without_permissions_is_refused;
-          Alcotest.test_case "missing key" `Quick a_missing_private_key_is_refused;
+          Alcotest.test_case "key reference" `Quick
+            a_key_reference_is_not_resolved_at_validation;
           Alcotest.test_case "complete" `Quick a_complete_config_is_accepted ] );
       ( "request",
         [ Alcotest.test_case "jwt window" `Quick the_jwt_window_satisfies_github;

@@ -1,7 +1,7 @@
 type config = {
   app_id : string;
   installation_id : string;
-  private_key_path : string;
+  private_key : Secret.t;
   repositories : string list;
   permissions : (string * string) list;
 }
@@ -70,10 +70,14 @@ let pairs_field table key =
 let load_config table =
   let* app_id = string_field table "app_id" in
   let* installation_id = string_field table "installation_id" in
-  let* private_key_path = string_field table "private_key_path" in
+  let* key_reference = string_field table "private_key_path" in
+  let* private_key =
+    Result.map_error (fun reason -> Invalid_config reason)
+      (Secret.of_reference key_reference)
+  in
   let* repositories = string_list_field table "repositories" in
   let* permissions = pairs_field table "permissions" in
-  Ok { app_id; installation_id; private_key_path; repositories; permissions }
+  Ok { app_id; installation_id; private_key; repositories; permissions }
 
 (* A token with no declared repositories reaches every repository the App is
    installed on, which is exactly the blast radius the design tries to avoid. *)
@@ -91,8 +95,6 @@ let validate config =
       (Invalid_config
          "no permissions declared; the token would carry the App's full \
           installation authority")
-  else if not (Sys.file_exists config.private_key_path) then
-    Error (Missing_private_key config.private_key_path)
   else Ok ()
 
 type http_post = url:string -> bearer:string -> (int * string, string) result
@@ -139,23 +141,55 @@ let signing_input config ~now =
 
 type signer = string -> (string, string) result
 
-let openssl_signer ~runner ~openssl ~private_key_path input =
-  (* The key is read by openssl from its path and the input arrives on stdin,
-     so neither appears in argv where another local process could read it. *)
-  let request =
-    {
-      Process_runner.executable = openssl;
-      argv = [ "dgst"; "-sha256"; "-sign"; private_key_path ];
-      env = [ ("PATH", try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin") ];
-      stdin = Some input;
-      stdio = Process_runner.Capture;
-    }
+let openssl_signer ~runner ~openssl ~reader config input =
+  (* The key is resolved inside the callback and handed to openssl on stdin. It
+     is never an argument, and it never becomes a value this function returns.
+     openssl reads the key from a path, so a keychain-sourced key is written to
+     a private temporary file for the duration of the call. *)
+  let signature = ref None in
+  let outcome =
+    Secret.with_value ~reader config.private_key ~f:(fun key_bytes ->
+        let key_file = Filename.temp_file "ade-jwt-" ".pem" in
+        let write () =
+          let descriptor =
+            Unix.openfile key_file [ Unix.O_WRONLY; Unix.O_TRUNC ] 0o600
+          in
+          let channel = Unix.out_channel_of_descr descriptor in
+          output_string channel key_bytes;
+          close_out channel
+        in
+        let cleanup () = try Sys.remove key_file with Sys_error _ -> () in
+        write ();
+        let request =
+          {
+            Process_runner.executable = openssl;
+            argv = [ "dgst"; "-sha256"; "-sign"; key_file ];
+            env = [ ("PATH", try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin") ];
+            stdin = Some input;
+            stdio = Process_runner.Capture;
+          }
+        in
+        let result = runner request in
+        cleanup ();
+        match result with
+        | Error error -> Error error
+        | Ok { Process_runner.status = 0; stdout; _ } when stdout <> "" ->
+            signature := Some stdout;
+            Ok ()
+        | Ok { Process_runner.status; stderr; _ } ->
+            Error
+              (Ade_error.Operation_refused
+                 {
+                   operation = "sign JWT";
+                   reason =
+                     Printf.sprintf "openssl exited with %d: %s" status
+                       (String.trim stderr);
+                 }))
   in
-  match runner request with
-  | Error error -> Error (Ade_error.to_string error)
-  | Ok { Process_runner.status = 0; stdout; _ } when stdout <> "" -> Ok stdout
-  | Ok { Process_runner.status; stderr; _ } ->
-      Error (Printf.sprintf "openssl exited with %d: %s" status (String.trim stderr))
+  match (outcome, !signature) with
+  | Ok (), Some value -> Ok value
+  | Ok (), None -> Error "openssl produced no signature"
+  | Error error, _ -> Error (Ade_error.to_string error)
 
 let sign_jwt ~signer config ~now =
   let input = signing_input config ~now in

@@ -96,3 +96,8 @@
  (name test_github_credential)
  (modules test_github_credential)
  (libraries ade alcotest))
+
+(test
+ (name test_secret)
+ (modules test_secret)
+ (libraries ade alcotest))

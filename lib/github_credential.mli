@@ -12,9 +12,10 @@
 type config = {
   app_id : string;
   installation_id : string;
-  private_key_path : string;
-      (** A host path or Keychain reference. The key never enters the guest:
-          only the derived, expiring installation token does. *)
+  private_key : Secret.t;
+      (** A reference to the App's private key, never the key itself. It stays
+          on the host: only the derived, expiring installation token reaches the
+          guest. *)
   repositories : string list;
   permissions : (string * string) list;  (** e.g. [("contents", "write")] *)
 }
@@ -58,7 +59,7 @@ type signer = string -> (string, string) result
     Abstract so the flow is testable without a real key. *)
 
 val openssl_signer :
-  runner:Process_runner.t -> openssl:string -> private_key_path:string -> signer
+  runner:Process_runner.t -> openssl:string -> reader:Secret.reader -> config -> signer
 (** Sign via openssl at the existing process boundary. ADE has no RSA
     implementation of its own, and this avoids adding a crypto dependency for
     one operation. The key is read by openssl from its path; it is never passed
