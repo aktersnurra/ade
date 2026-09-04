@@ -4,13 +4,25 @@ type t = { executable : string; runner : Process_runner.t }
 
 let make ~executable ~runner = { executable; runner }
 
+(* The runtime locates its own machine state through HOME and the XDG base
+   directories. Forwarding them is what lets a caller point ADE at an isolated
+   runtime state directory; without them the runtime silently reads the
+   invoking user's real machines, which is both wrong and dangerous during
+   qualification. Nothing else from the host environment is passed. *)
+let forwarded_environment () =
+  let pass name =
+    match Sys.getenv_opt name with Some value -> [ (name, value) ] | None -> []
+  in
+  ("PATH", try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin")
+  :: List.concat_map pass
+       [ "HOME"; "XDG_DATA_HOME"; "XDG_CACHE_HOME"; "XDG_CONFIG_HOME";
+         "XDG_STATE_HOME"; "SMOLVM_AGENT_ROOTFS"; "SMOLVM_LIB_DIR" ]
+
 let request t ?stdin ?(stdio = Process_runner.Capture) argv =
   {
     Process_runner.executable = t.executable;
     argv;
-    (* PATH is required for the runtime's own helper lookups. Nothing else from
-       the host environment is forwarded. *)
-    env = [ ("PATH", try Sys.getenv "PATH" with Not_found -> "/usr/bin:/bin") ];
+    env = forwarded_environment ();
     stdin;
     stdio;
   }
@@ -76,11 +88,19 @@ let state t name =
 let create_argv declaration =
   let name = Workbench_name.to_string (Declaration.name declaration) in
   let resources = Declaration.resources declaration in
+  (* A locally built image is passed by path. SmolVM would otherwise try to
+     pull it from a registry, which fails for a networked workbench and cannot
+     even be attempted by a sealed one. *)
+  let image =
+    match Declaration.image declaration with
+    | Declaration.Registry { reference } -> reference
+    | Declaration.Local_artifact { path; _ } -> path
+  in
   let base =
     [
       "machine"; "create";
       "--name"; name;
-      "--image"; Declaration.image declaration;
+      "--image"; image;
       "--cpus"; string_of_int resources.Declaration.cpus;
       "--mem"; string_of_int resources.Declaration.memory_mib;
       "--overlay"; string_of_int resources.Declaration.overlay_gib;

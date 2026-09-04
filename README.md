@@ -1,101 +1,100 @@
-# ADE Microsandbox Workbenches
+# ADE
 
-ADE is a runnable, configurable Microsandbox 0.6.10 workstation setup. Microsandbox remains the runtime; this repository supplies reproducible OCI images and editable capability profiles for images, resources, mounts, networking, credentials, persistence, and native execution.
+Run coding agents inside named local Linux workbench VMs.
 
-There is no SSH transport, custom VM runtime, or parallel lifecycle state machine.
+Each workbench is a durable boundary for one identity and data domain — `work`,
+`personal`, `offline`, `quarantine`. ADE is policy and transaction glue around a
+pinned [SmolVM](https://github.com/smol-machines/smolvm) runtime, which stays
+authoritative for machine existence and state.
 
-## What is included
+## What is here
 
-- `bin/ade` — a transparent profile launcher around native `msb` commands;
-- `profiles/work.sh` — deny-by-default work allowlist with optional repository and identity mounts;
-- `profiles/work-offline.sh` — isolated workbench with no network or credential source;
-- `profiles/work-cloud.sh.example` — safe starting point for provider-specific cloud authority;
-- `profiles/personal.sh` — public-network personal profile with separate persistent state;
-- `images/nix-workstation/` — configurable `aarch64-linux` OCI image built with Nix;
-- `docs/microsandbox-workbenches.md` — complete configuration and operation reference;
-- pinned Microsandbox 0.6.10 validation and qualification documents.
+- `bin/`, `lib/` — the `ade` CLI, one small OCaml binary
+- `workbenches/` — host-owned declarations, one per workbench
+- `nix/` — the pinned runtime, guest agent rootfs and library set
+- `images/nix-workstation/` — the workbench OCI image
+- `smolfiles/` — the machine definition
+- `scripts/install-smolvm.sh` — install the qualified runtime
+- `scripts/build-workstation-image.sh` — build the image inside a workbench
+- `docs/smolvm-workbenches.md` — operational guide
 
-Profiles are executable Bash configuration. They can select any image, mount arbitrary configured host paths, choose any Microsandbox network policy, load credentials from any host mechanism, bake or mount configuration, and append native create options.
-
-## Install the qualified runtime
-
-```sh
-./scripts/install-msb.sh
-```
-
-This installs the checksum-verified Microsandbox 0.6.10 runtime under `~/.local/share/ade/runtime/` without replacing Homebrew or writing `~/.microsandbox`. `bin/ade` discovers it automatically. `MSB_BIN` and `MSB_HOME` remain explicit overrides.
-
-## Build and load the workstation image
+## Install
 
 ```sh
-./bin/ade build-image
-./bin/ade load-image
+./scripts/install-smolvm.sh
 ```
 
-On macOS, the image targets `aarch64-linux` and therefore requires a Linux Nix builder. See the workbench guide for the disposable Microsandbox builder workflow.
+Builds SmolVM 1.13.1 from the pinned source, verifies its version, digest and
+macOS hypervisor entitlement, then installs it under
+`~/.local/share/ade/runtime/`. It never touches Homebrew or the upstream SmolVM
+directories.
 
-## Agents run inside the VM
+`mkfs.ext4` must be on `PATH`; the runtime shells out to it to format machine
+disks.
 
-Install and authenticate agent harnesses inside the selected VM. The checked-in
-profiles do not forward ambient host API keys or PATs. VM-local login state is
-kept in each profile's persistent `/root/.config` mount, which separates work
-and personal authority.
-
-Mount a repository tree explicitly when an agent needs it:
+## Use
 
 ```sh
-export ADE_WORK_REPOS="$HOME/work/repos"
-./bin/ade start work
+ade create work          # create from the declaration
+ade start work           # ensure running
+ade attach work          # start if needed, then attach
+ade exec work -- CMD
+ade status work
+ade stop work
 ```
 
-`ade reimage` replaces only the guest root. Mounted repositories and
-configuration survive, so inspect mounted data and rotate exposed credentials
-after a compromise.
-
-## Run workbenches
+Maintenance:
 
 ```sh
-./bin/ade create work
-./bin/ade start work
-./bin/ade start work-offline
-
-./bin/ade exec work -- uname -a
-./bin/ade stream work -- sh -lc 'cat'
-./bin/ade inspect work
-./bin/ade stop work
-./bin/ade reimage work
-
-./bin/ade start personal
+ade backup work DEST
+ade restore work ARCHIVE --replace-workspace
+ade reimage work
+ade pack work OUTPUT
+ade destroy work --no-backup --confirm-destroy-workspace=work
+ade credentials status work
 ```
 
-`start` explicitly establishes a running sandbox and then enters its native Microsandbox PTY. Leaving the shell does not stop the sandbox. `reimage` removes and recreates the VM while preserving every host-backed mount.
+Every command states an intended end state and is safe to repeat. Creating an
+existing machine converges rather than recreating it, which would destroy the
+workspace.
 
-## Customize
+## Trust model
 
-Edit the checked-in profiles or place replacements at:
+A workbench VM is one security principal. Agents, tools and containers inside
+one workbench are mutually trusted at VM level: any process may read the
+workbench filesystem and use the capabilities that workbench holds. Use
+different workbenches when identities, data or authority must not mix.
 
-```text
-~/.config/ade/profiles/work.sh
-~/.config/ade/profiles/work-offline.sh
-~/.config/ade/profiles/work-cloud.sh
-~/.config/ade/profiles/personal.sh
+Guest root is untrusted. The host, ADE, the pinned runtime and the hypervisor
+are inside the trusted computing base.
+
+Credentials are written only to guest tmpfs under `/run/ade/secrets`, and a
+`Secret.t` can be neither printed nor written into a declaration. ADE cannot
+stop guest code copying a credential into persistent state, so workspace
+backups and machine packs are always treated as potentially secret-bearing.
+
+## Testing
+
+```sh
+nix develop -c dune runtest                # unit and adapter suites
+python3 -m unittest discover -s test -t .  # installer and runtime qualification
 ```
 
-The image package set is `images/nix-workstation/packages.nix`. Files under `images/nix-workstation/root/` are baked verbatim into the image.
+Property tests need a native arm64 opam switch; see `docs/hegel-testing.md`.
 
-Credential environment files default to:
+Runtime qualification needs an installed runtime and a **short** `HOME`: the
+guest agent socket lives under it, and macOS caps `sun_path` at 104 bytes,
+which a `$TMPDIR` path exceeds.
 
-```text
-~/.config/ade/credentials/work.env
-~/.config/ade/credentials/personal.env
-```
+## Status
 
-They are optional. Profiles may instead load credentials from macOS Keychain, 1Password, `pass`, SOPS, mounted files, baked image files, or any other desired source.
+The command surface is complete. The runtime boots, runs containers, and
+enforces network postures — a positive hostname allowlist is verified to block
+hosts not on the list.
 
-## Documentation
-
-- [Microsandbox workbench guide](docs/microsandbox-workbenches.md)
-- [Microsandbox 0.6.10 native execution validation](docs/superpowers/specs/2026-08-18-microsandbox-0.6.10-native-execution-validation.md)
-- [Native execution qualification](docs/superpowers/plans/2026-08-18-microsandbox-native-execution-qualification.md)
-
-Earlier ADE architecture documents remain as historical design records and are not the current implementation contract.
+Parts of the design's qualification gate remain unverified: Docker and nested
+containers, Herdr startup, interactive attachment, and backups above 4 GiB. The
+libkrun/libkrunfw pair is consumed from upstream's release, pinned by hash but
+without signature or provenance attestation, because the guest kernel needs a
+compiler nixpkgs no longer carries. Both gaps are recorded in
+`docs/superpowers/specs/2026-08-30-smolvm-qualification-evidence.md`.

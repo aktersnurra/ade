@@ -320,22 +320,34 @@ because the naive version would have produced a false negative:
 - An HTTP **403** still proves egress works — DNS resolved, TCP connected, a
   server replied. Only a timeout or resolution failure means blocked.
 
+### Allowlist enforcement verified (2026-09-04)
+
+A positive hostname allowlist is enforced by the runtime, not by agent
+convention. On a machine created with `--net --allow-host example.com`:
+
+```
+wget http://example.com   -> '/dev/null' saved
+wget http://neverssl.com  -> wget: bad address 'neverssl.com'
+```
+
+The allowlisted host resolves and transfers; a host not on the list fails at
+resolution. This is the claim the `allowlisted` posture rests on.
+
 ### Not yet covered
 
 The design lists these as blocking, and they remain untested:
 
-- secret installation, atomic activation, expiry and reinjection (needs the
-  credential providers, Task 11);
-- reimage with crash injection at every journal boundary, and recovery before
-  and after old-machine deletion;
-- workspace backup and restore above 4 GiB;
 - Docker and a nested container workload;
 - Herdr startup, attachment and multi-agent use;
 - native interactive attachment, streams, signals and stop disconnect;
-- allowlist enforcement per hostname and CIDR, and Docker container egress.
+- workspace backup and restore above 4 GiB;
+- CIDR allowlist entries, and egress from a Docker container inside a
+  workbench.
 
-The reimage and backup executors exist and are tested against a fake runtime,
-so the crash-injection work is now possible; it was not before.
+Secret installation and reimage crash injection, previously listed here, are
+now covered by `test_credential_installer.ml` and `test_reimage_crash.ml`. The
+SSH agent is tested against a fake host rather than a real `ssh-agent`, so its
+process interaction is also still unqualified.
 
 ### Still open elsewhere
 

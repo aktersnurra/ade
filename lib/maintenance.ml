@@ -131,8 +131,8 @@ let reimage ~smolvm ~paths ~declaration ~force_quiesce =
             Reimage.transaction_id = id;
             machine_name = Workbench_name.to_string name;
             phase;
-            old_image_digest = Declaration.image declaration;
-            new_image_digest = Declaration.image declaration;
+            old_image_digest = Declaration.image_digest declaration;
+            new_image_digest = Declaration.image_digest declaration;
             old_declaration_digest = digest;
             new_declaration_digest = digest;
             staging_path = staging;

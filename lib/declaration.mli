@@ -4,6 +4,14 @@
     are rejected rather than ignored, so host configuration drift is visible
     instead of silently discarded. *)
 
+type image =
+  | Registry of { reference : string }
+      (** A registry reference pinned by digest, e.g. [name@sha256:...]. *)
+  | Local_artifact of { path : string; digest : string }
+      (** A tarball on the host, still pinned by the digest of the image it
+          contains. A workbench built from a locally produced image cannot pull
+          from a registry, and a sealed workbench has no network to pull with. *)
+
 type network =
   | Sealed
   | Public
@@ -26,7 +34,12 @@ type t
 
 val load : string -> (t, Ade_error.t) result
 val name : t -> Workbench_name.t
-val image : t -> string
+val image : t -> image
+
+val image_digest : t -> string
+(** The pinned digest, whichever form the image takes. Drift comparison and the
+    declaration digest use this, so moving an image between a registry and a
+    local artifact is not a change of identity. *)
 val smolfile : t -> string
 val resources : t -> resources
 val network : t -> network

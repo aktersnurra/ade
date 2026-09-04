@@ -1,3 +1,7 @@
+type image =
+  | Registry of { reference : string }
+  | Local_artifact of { path : string; digest : string }
+
 type network =
   | Sealed
   | Public
@@ -18,7 +22,7 @@ type backup = { directory : string; keep : int }
 
 type t = {
   name : Workbench_name.t;
-  image : string;
+  image : image;
   smolfile : string;
   resources : resources;
   network : network;
@@ -30,6 +34,14 @@ type t = {
 
 let name d = d.name
 let image d = d.image
+
+let image_digest d =
+  match d.image with
+  | Registry { reference } -> (
+      match String.index_opt reference '@' with
+      | Some at -> String.sub reference (at + 1) (String.length reference - at - 1)
+      | None -> reference)
+  | Local_artifact { digest; _ } -> digest
 let smolfile d = d.smolfile
 let resources d = d.resources
 let network d = d.network
@@ -87,28 +99,44 @@ let positive context value =
 
 (* The image must be pinned by immutable digest. A moving tag would silently
    change the trusted execution substrate between reimages. *)
+(* A digest is required whichever form the image takes: a moving tag would
+   silently change the trusted execution substrate between reimages. *)
+let validate_digest digest =
+  let prefix = "sha256:" in
+  let prefix_length = String.length prefix in
+  if String.length digest <= prefix_length || String.sub digest 0 prefix_length <> prefix
+  then fail "image digest must use the sha256: prefix"
+  else
+    let hex = String.sub digest prefix_length (String.length digest - prefix_length) in
+    if String.length hex <> 64 then fail "image digest must be 64 hexadecimal characters"
+    else if
+      not (String.for_all (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false) hex)
+    then fail "image digest must be lowercase hexadecimal"
+    else digest
+
+let split_on_digest image =
+  match String.index_opt image '@' with
+  | None -> fail "image must be pinned by digest (expected name@sha256:... )"
+  | Some at ->
+      ( String.sub image 0 at,
+        String.sub image (at + 1) (String.length image - at - 1) )
+
 let parse_image value =
   let image = as_string "image" value in
-  match String.index_opt image '@' with
-  | None -> fail "image must be pinned by digest (expected name@sha256:...)"
-  | Some at ->
-      let digest = String.sub image (at + 1) (String.length image - at - 1) in
-      let prefix = "sha256:" in
-      let prefix_length = String.length prefix in
-      if String.length digest <= prefix_length
-         || String.sub digest 0 prefix_length <> prefix
-      then fail "image digest must use the sha256: prefix"
-      else
-        let hex = String.sub digest prefix_length (String.length digest - prefix_length) in
-        if String.length hex <> 64 then
-          fail "image digest must be 64 hexadecimal characters"
-        else if
-          not
-            (String.for_all
-               (function '0' .. '9' | 'a' .. 'f' -> true | _ -> false)
-               hex)
-        then fail "image digest must be lowercase hexadecimal"
-        else image
+  let prefix = "file:" in
+  let prefix_length = String.length prefix in
+  if String.length image > prefix_length && String.sub image 0 prefix_length = prefix
+  then
+    (* A locally built image: the tarball path carries the digest of what it
+       contains, so the substrate stays pinned even though nothing is pulled. *)
+    let rest = String.sub image prefix_length (String.length image - prefix_length) in
+    let path, digest = split_on_digest rest in
+    if path = "" then fail "the local image reference names no path"
+    else Local_artifact { path; digest = validate_digest digest }
+  else
+    let name, digest = split_on_digest image in
+    if name = "" then fail "the image reference names no image"
+    else Registry { reference = name ^ "@" ^ validate_digest digest }
 
 let parse_cidr value =
   match String.index_opt value '/' with
@@ -266,7 +294,7 @@ let canonical d =
   let buffer = Buffer.create 512 in
   let line key value = Buffer.add_string buffer (key ^ "=" ^ value ^ "\n") in
   line "name" (Workbench_name.to_string d.name);
-  line "image" d.image;
+  line "image" (image_digest d);
   line "smolfile" d.smolfile;
   line "cpus" (string_of_int d.resources.cpus);
   line "memory_mib" (string_of_int d.resources.memory_mib);
