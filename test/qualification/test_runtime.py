@@ -7,7 +7,7 @@ runtime and are skipped when none is installed.
 import json
 import unittest
 
-from .runtime import RuntimeTestCase
+from .runtime import REPO_ROOT, RuntimeTestCase
 
 
 class LifecycleTest(RuntimeTestCase):
@@ -158,3 +158,41 @@ class HostIsolationTest(RuntimeTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkstationImageTest(RuntimeTestCase):
+    """The image a workbench actually runs, rather than a bare Alpine.
+
+    Skipped when the artifact has not been built, so the suite stays runnable
+    on a fresh checkout.
+    """
+
+    IMAGE = REPO_ROOT / "artifacts" / "ade-nix-workstation-0.1.0.tar"
+
+    def setUp(self):
+        super().setUp()
+        if not self.IMAGE.exists():
+            self.skipTest("workstation image not built")
+
+    def image_run(self, script, timeout=590):
+        return self.smolvm(
+            "machine", "run", "--image", str(self.IMAGE), "--",
+            "/bin/bash", "-c", script, timeout=timeout,
+        )
+
+    def test_herdr_is_the_pinned_version(self):
+        result = self.image_run("herdr --version")
+        self.assertIn("herdr 0.8.2", result.stdout, msg=result.stderr[-400:])
+
+    def test_herdr_manages_a_session(self):
+        # The reason ADE exists: Herdr owns agent processes, worktrees and
+        # sessions inside the workbench.
+        result = self.image_run(
+            "export HOME=/root; timeout 40 herdr session list 2>&1 | head -3"
+        )
+        self.assertIn("default", result.stdout, msg=result.stderr[-400:])
+
+    def test_the_ocaml_toolchain_is_usable(self):
+        result = self.image_run("ocaml -version; dune --version")
+        self.assertIn("5.5.0", result.stdout, msg=result.stderr[-400:])
+        self.assertIn("3.23", result.stdout)

@@ -4,7 +4,7 @@
 # authorization; it only permits the workbench to reach that endpoint.
 
 name = "work"
-image = "file:/Users/aktersnurra/projects/vibe/gatekeep.workspaces/transport-qualification/artifacts/ade-nix-workstation-0.1.0.tar@sha256:d8db3517d2c8c667b130531741dfbf7a3e71a508442465c585af27de1b0e9234"
+image = "file:/Users/aktersnurra/projects/vibe/gatekeep.workspaces/transport-qualification/artifacts/ade-nix-workstation-0.1.0.tar@sha256:cca178a64daed733a401f1fd32e5c0889d1427fed43787a6f7c5e9877185a12b"
 smolfile = "smolfiles/workstation.Smolfile"
 
 [resources]

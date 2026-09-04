@@ -26,8 +26,13 @@ let
     rresult
     yojson
   ];
+
+  # Herdr owns agent processes, worktrees, shells and sessions inside the
+  # workbench. ADE only materializes its trusted configuration, starts it, and
+  # attaches; it does not manage what runs inside.
+  herdr = pkgs.callPackage ./herdr.nix { };
 in
-with pkgs; ocamlToolchain ++ [
+with pkgs; ocamlToolchain ++ [ herdr ] ++ [
   bashInteractive
   cacert
   coreutils

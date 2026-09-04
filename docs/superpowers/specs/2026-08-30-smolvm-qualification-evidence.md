@@ -333,21 +333,46 @@ wget http://neverssl.com  -> wget: bad address 'neverssl.com'
 The allowlisted host resolves and transfers; a host not on the list fails at
 resolution. This is the claim the `allowlisted` posture rests on.
 
+### Herdr verified in the workbench (2026-09-05)
+
+Herdr 0.8.2 Linux aarch64 is now in the workstation image, pinned to the
+SHA-256 upstream publishes in `herdr.dev/latest.json`. That hash was checked
+against the plan's pin and matches:
+
+```
+f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d
+```
+
+It is a prebuilt binary: upstream publishes no reproducible build, and the
+guest needs a Linux executable. The hash pin is what makes it verifiable.
+
+Inside a workbench it reports `herdr 0.8.2` and manages sessions:
+
+```
+$ herdr session list
+name      status   directory              socket
+default   stopped  /root/.config/herdr    /root/.config/herdr/herdr.sock
+```
+
+`test/qualification/test_runtime.py::WorkstationImageTest` keeps this verified,
+along with the OCaml toolchain. These tests boot a VM with a 3.6 GB image, so
+each takes minutes rather than seconds.
+
 ### Not yet covered
 
 The design lists these as blocking, and they remain untested:
 
 - Docker and a nested container workload;
-- Herdr startup, attachment and multi-agent use;
+- Herdr *attachment* and multi-agent use -- the server and session management
+  are verified, but ADE's `attach` path and multiple concurrent agents are not;
 - native interactive attachment, streams, signals and stop disconnect;
 - workspace backup and restore above 4 GiB;
 - CIDR allowlist entries, and egress from a Docker container inside a
   workbench.
 
-Secret installation and reimage crash injection, previously listed here, are
-now covered by `test_credential_installer.ml` and `test_reimage_crash.ml`. The
-SSH agent is tested against a fake host rather than a real `ssh-agent`, so its
-process interaction is also still unqualified.
+The SSH agent is tested against a fake host rather than a real `ssh-agent`, so
+its process interaction is also unqualified, and `reimage` and `destroy` have
+only ever run against a fake runtime.
 
 ### Still open elsewhere
 
