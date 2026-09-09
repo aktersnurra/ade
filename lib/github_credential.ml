@@ -199,28 +199,32 @@ let sign_jwt ~signer config ~now =
 
 (* GitHub returns an RFC 3339 expiry. Parsing only the fields needed keeps this
    free of a date library. *)
+(* GitHub returns an RFC 3339 UTC timestamp. The epoch is computed directly
+   rather than through Unix.mktime, which interprets the fields in the host's
+   local timezone; correcting for that afterwards is unreliable because mktime
+   also normalizes tm_isdst. Days-since-epoch is exact and timezone-free. *)
 let parse_expiry text =
+  let days_from_civil year month day =
+    (* Howard Hinnant's civil-from-days, inverted: shifts the year so leap-day
+       handling falls at the end of the cycle. *)
+    let year = if month <= 2 then year - 1 else year in
+    let era = (if year >= 0 then year else year - 399) / 400 in
+    let year_of_era = year - (era * 400) in
+    let day_of_year =
+      ((153 * (if month > 2 then month - 3 else month + 9)) + 2) / 5 + day - 1
+    in
+    let day_of_era =
+      (year_of_era * 365) + (year_of_era / 4) - (year_of_era / 100) + day_of_year
+    in
+    (era * 146097) + day_of_era - 719468
+  in
   try
     Scanf.sscanf text "%4d-%2d-%2dT%2d:%2d:%2dZ"
       (fun year month day hour minute second ->
-        let tm =
-          {
-            Unix.tm_year = year - 1900;
-            tm_mon = month - 1;
-            tm_mday = day;
-            tm_hour = hour;
-            tm_min = minute;
-            tm_sec = second;
-            tm_wday = 0;
-            tm_yday = 0;
-            tm_isdst = false;
-          }
-        in
-        (* timegm, not mktime: the value is UTC and must not be shifted by the
-           host's local timezone. *)
-        let epoch, _ = Unix.mktime tm in
-        let offset = fst (Unix.mktime (Unix.gmtime 0.0)) in
-        Some (epoch -. offset))
+        let days = days_from_civil year month day in
+        Some
+          (float_of_int
+             (((days * 24 + hour) * 60 + minute) * 60 + second)))
   with _ -> None
 
 let exchange ~post config ~jwt ~now =

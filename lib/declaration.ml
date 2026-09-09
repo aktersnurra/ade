@@ -30,6 +30,7 @@ type t = {
   docker_enabled : bool;
   herdr_enabled : bool;
   backup : backup;
+  github_credential : Otoml.t option;
 }
 
 let name d = d.name
@@ -49,6 +50,7 @@ let ssh d = d.ssh
 let docker_enabled d = d.docker_enabled
 let herdr_enabled d = d.herdr_enabled
 let backup d = d.backup
+let github_credential d = d.github_credential
 
 (* Parsing is written as a small result-returning reader over the TOML value so
    that every failure carries the declaration path and a concrete reason. *)
@@ -252,7 +254,8 @@ let sub_table root key context =
 
 let parse root =
   reject_unknown ~context:"the declaration" root
-    [ "name"; "image"; "smolfile"; "resources"; "network"; "services"; "ssh"; "backup" ];
+    [ "name"; "image"; "smolfile"; "resources"; "network"; "services"; "ssh";
+      "backup"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
     match Workbench_name.of_string name_value with
@@ -274,7 +277,19 @@ let parse root =
     match find root "ssh" with Some table -> parse_ssh table | None -> Disabled
   in
   let backup = parse_backup (sub_table root "backup" "the declaration") in
-  { name; image; smolfile; resources; network; ssh; docker_enabled; herdr_enabled; backup }
+  (* The credential table is carried through unparsed: each provider module
+     owns its own schema, and Declaration should not have to know them all. *)
+  let github_credential =
+    match find root "credentials" with
+    | Some table -> (
+        reject_unknown ~context:"[credentials]" table [ "github"; "kubernetes" ];
+        match find table "github" with Some github -> Some github | None -> None)
+    | None -> None
+  in
+  {
+    name; image; smolfile; resources; network; ssh; docker_enabled; herdr_enabled;
+    backup; github_credential;
+  }
 
 let load path =
   if not (Sys.file_exists path) then Error (Ade_error.Declaration_not_found { path })

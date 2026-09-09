@@ -48,6 +48,11 @@ val docker_enabled : t -> bool
 val herdr_enabled : t -> bool
 val backup : t -> backup
 
+val github_credential : t -> Otoml.t option
+(** The raw [[credentials.github]] table, if declared. Left unparsed here so
+    the credential module owns its own schema; Declaration only decides whether
+    one was given. *)
+
 val digest_hex : t -> string
 (** SHA-256 over a canonical rendering of the declaration.
 

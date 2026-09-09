@@ -171,6 +171,27 @@ let a_signing_failure_is_reported () =
   | Error e -> Alcotest.failf "unexpected: %s" (Github_credential.describe_error e)
   | Ok _ -> Alcotest.fail "expected a signing failure to be reported"
 
+(* The expiry must be read as UTC regardless of the host timezone. An earlier
+   implementation went through Unix.mktime, which interprets the fields
+   locally; it produced a time hours off and, in one direction, an expiry
+   already in the past, so a freshly minted token was refused as expired. The
+   exact epochs are pinned here because that bug is invisible on a UTC host. *)
+let expiries_are_parsed_as_utc () =
+  List.iter
+    (fun (timestamp, expected) ->
+      let body = Printf.sprintf {|{"token":"t","expires_at":"%s"}|} timestamp in
+      match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"j" ~now with
+      | Error e -> Alcotest.failf "%s: %s" timestamp (Github_credential.describe_error e)
+      | Ok minted ->
+          Alcotest.(check (float 0.5)) timestamp expected minted.Provider.expires_at)
+    [
+      ("1970-01-01T00:00:00Z", 0.0);
+      ("2000-01-01T00:00:00Z", 946684800.0);
+      ("2025-08-29T21:40:00Z", 1756503600.0);
+      (* A leap day, which naive month arithmetic gets wrong. *)
+      ("2024-02-29T12:00:00Z", 1709208000.0);
+    ]
+
 let () =
   Alcotest.run "github_credential"
     [ ( "configuration",
@@ -187,7 +208,8 @@ let () =
           Alcotest.test_case "refusal" `Quick a_refused_exchange_is_reported;
           Alcotest.test_case "malformed" `Quick a_malformed_response_is_reported;
           Alcotest.test_case "expiry fallback" `Quick
-            an_unreadable_expiry_falls_back_to_one_hour ] );
+            an_unreadable_expiry_falls_back_to_one_hour;
+          Alcotest.test_case "utc" `Quick expiries_are_parsed_as_utc ] );
       ( "encoding",
         [ Alcotest.test_case "vectors" `Quick base64url_matches_the_spec;
           Alcotest.test_case "url safe" `Quick

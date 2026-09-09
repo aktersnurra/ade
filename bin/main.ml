@@ -290,17 +290,56 @@ let credentials_rotate_command =
     with_declaration name (fun lifecycle declaration ->
         let* status = Lifecycle.status lifecycle declaration in
         let running = status.Lifecycle.state = Smolvm.Running in
+        let now = Unix.gettimeofday () in
+        let workbench = Declaration.name declaration in
+        let label = Workbench_name.to_string workbench in
         (* A stopped workbench needs no active generation: start, attach and
            exec install one before any dependent agent runs. *)
         let decision =
-          Credential_schedule.decide ~now:(Unix.gettimeofday ()) ~margin_seconds:300.0
-            ~running ~generation:None
+          Credential_schedule.decide ~now ~margin_seconds:300.0 ~running
+            ~generation:None
         in
-        ignore due;
-        Printf.printf "%s\t%s\n"
-          (Workbench_name.to_string (Declaration.name declaration))
-          (Credential_schedule.describe decision);
-        Ok ())
+        match (decision, Declaration.github_credential declaration) with
+        | Credential_schedule.Rotate, Some table ->
+            let* config =
+              Result.map_error
+                (fun error ->
+                  Ade_error.Operation_refused
+                    { operation = "credentials rotate";
+                      reason = Github_credential.describe_error error })
+                (Github_credential.load_config table)
+            in
+            let smolvm =
+              Smolvm.make ~executable:(smolvm_executable ()) ~runner:Process_runner.run
+            in
+            let* rotation =
+              Credential_flow.rotate_github ~smolvm ~name:workbench ~config ~now
+                ~previous:None ()
+            in
+            (* Secret-free by construction: provider, generation and outcome. *)
+            print_endline
+              (Credential.audit_line
+                 {
+                   Credential.provider = Credential.Github;
+                   generation_number =
+                     rotation.Credential_flow.generation.Credential.number;
+                   expires_at =
+                     rotation.Credential_flow.generation.Credential.expires_at;
+                   outcome =
+                     String.concat "+"
+                       (List.map Credential_flow.describe_step
+                          rotation.Credential_flow.steps);
+                 });
+            Ok ()
+        | Credential_schedule.Rotate, None ->
+            (* Due, but nothing declared to mint from. Saying so beats
+               reporting success for work that did not happen. *)
+            Printf.printf "%s\tdue, but no credentials are declared\n" label;
+            Ok ()
+        | decision, _ ->
+            ignore due;
+            Printf.printf "%s\t%s\n" label (Credential_schedule.describe decision);
+            Ok ())
   in
   Cmd.v
     (Cmd.info "rotate" ~doc:"Rotate credentials that are due, then exit")
