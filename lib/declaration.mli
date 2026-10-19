@@ -31,13 +31,21 @@ type resources = {
 
 type backup = { directory : string; keep : int }
 
-type mount_mode = Read_only | Read_write
+type mount_mode =
+  | Read_only
+  | Read_write
+  | Clone
+      (** Mounted read-only; the agent clones it into its own disk and changes
+          come back as a git bundle ({!Pull}), never through the mount. *)
 
 type mount = { host : string; guest : string; mode : mount_mode }
 (** A host directory made visible in the guest. [host] is as written, which may
     start with [~/]; {!Host_mount} resolves and polices it on the host. [guest]
     is validated here: absolute, in normal form, clear of reserved guest paths
     and of every other mount. *)
+
+val clone_name : mount -> string
+(** The repository's name: the last component of its host path. *)
 
 type t
 
