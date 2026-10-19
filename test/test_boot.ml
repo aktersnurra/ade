@@ -80,7 +80,6 @@ let declaration_with ~ssh =
     (Printf.sprintf
        {|name = "work"
 image = "docker.io/library/ade@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-smolfile = "smolfiles/workstation.Smolfile"
 
 [resources]
 cpus = 2

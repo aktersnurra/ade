@@ -27,7 +27,6 @@ type t = {
   path : string;
   name : Workbench_name.t;
   image : image;
-  smolfile : string;
   resources : resources;
   network : network;
   ssh : ssh;
@@ -49,7 +48,6 @@ let image_digest d =
       | Some at -> String.sub reference (at + 1) (String.length reference - at - 1)
       | None -> reference)
   | Local_artifact { digest; _ } -> digest
-let smolfile d = d.smolfile
 let resources d = d.resources
 let network d = d.network
 let ssh d = d.ssh
@@ -340,7 +338,7 @@ let sub_table root key context =
 
 let parse ~path root =
   reject_unknown ~context:"the declaration" root
-    [ "name"; "image"; "smolfile"; "resources"; "network"; "services"; "ssh";
+    [ "name"; "image"; "resources"; "network"; "services"; "ssh";
       "backup"; "mount"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
@@ -350,8 +348,6 @@ let parse ~path root =
         fail (Printf.sprintf "invalid workbench name: %s" (Workbench_name.error_reason reason))
   in
   let image = parse_image (require root "image" "the declaration") in
-  let smolfile = as_string "smolfile" (require root "smolfile" "the declaration") in
-  if smolfile = "" then fail "smolfile must not be empty";
   let resources = parse_resources (sub_table root "resources" "the declaration") in
   let network = parse_network (sub_table root "network" "the declaration") in
   let docker_enabled, herdr_enabled =
@@ -374,7 +370,7 @@ let parse ~path root =
     | None -> None
   in
   {
-    path; name; image; smolfile; resources; network; ssh; docker_enabled; herdr_enabled;
+    path; name; image; resources; network; ssh; docker_enabled; herdr_enabled;
     backup; mounts; github_credential;
   }
 
@@ -397,7 +393,6 @@ let canonical d =
   let line key value = Buffer.add_string buffer (key ^ "=" ^ value ^ "\n") in
   line "name" (Workbench_name.to_string d.name);
   line "image" (image_digest d);
-  line "smolfile" d.smolfile;
   line "cpus" (string_of_int d.resources.cpus);
   line "memory_mib" (string_of_int d.resources.memory_mib);
   line "overlay_gib" (string_of_int d.resources.overlay_gib);
