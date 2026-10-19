@@ -50,6 +50,9 @@ let runner fake request =
   | "stop" ->
       fake.state <- "stopped";
       Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
+  | "delete" ->
+      fake.state <- "absent";
+      Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
   | _ -> Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
 
 let temp_root () =
@@ -57,11 +60,15 @@ let temp_root () =
   Sys.remove path;
   path
 
-let setup initial =
+let setup_with_paths initial =
   let fake = { state = initial; calls = []; last_argv = [] } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
   let paths = State_paths.make ~root:(temp_root ()) () in
-  (fake, Lifecycle.make ~services ~smolvm ~paths)
+  (fake, paths, Lifecycle.make ~services ~smolvm ~paths)
+
+let setup initial =
+  let fake, _, lifecycle = setup_with_paths initial in
+  (fake, lifecycle)
 
 let declaration () =
   match Declaration.load "../workbenches/work.toml" with
@@ -127,6 +134,24 @@ let bare_attach_opens_herdr () =
    | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
   Alcotest.(check string) "explicit" "bash" (List.nth fake.last_argv (List.length fake.last_argv - 1))
 
+(* Removal stops a running machine first, then deletes it and forgets its
+   state directory, so the name can be reused from scratch. *)
+let removing_a_running_machine_deletes_it_and_its_state () =
+  let fake, paths, lifecycle = setup_with_paths "running" in
+  let declaration = declaration () in
+  let dir = State_paths.workbench_dir paths (Declaration.name declaration) in
+  (match State_paths.ensure_dir (Filename.concat dir "credentials") with
+   | Ok () -> ()
+   | Error error -> Alcotest.failf "ensure_dir: %s" (Ade_error.to_string error));
+  check_outcome "remove" Lifecycle.Changed (Lifecycle.remove lifecycle declaration);
+  Alcotest.(check string) "state" "absent" fake.state;
+  Alcotest.(check bool) "stopped first" true (List.mem "stop" fake.calls);
+  Alcotest.(check bool) "state dir gone" false (Sys.file_exists dir)
+
+let removing_an_absent_machine_converges () =
+  let _, lifecycle = setup "absent" in
+  check_outcome "remove" Lifecycle.Converged (Lifecycle.remove lifecycle (declaration ()))
+
 let attaching_to_a_stopped_machine_starts_it () =
   let fake, lifecycle = setup "stopped" in
   (match Lifecycle.attach lifecycle (declaration ()) ~command:[] with
@@ -185,6 +210,9 @@ let () =
           Alcotest.test_case "stop stopped" `Quick stopping_a_stopped_machine_converges;
           Alcotest.test_case "stop running" `Quick stopping_a_running_machine_stops_it;
           Alcotest.test_case "restart" `Quick restarting_a_stopped_machine_starts_it ] );
+      ( "remove",
+        [ Alcotest.test_case "running" `Quick removing_a_running_machine_deletes_it_and_its_state;
+          Alcotest.test_case "absent" `Quick removing_an_absent_machine_converges ] );
       ( "attach",
         [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
           Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );

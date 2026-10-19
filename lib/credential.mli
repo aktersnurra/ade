@@ -5,8 +5,8 @@
     after validation.
 
     ADE cannot prevent guest code from copying a credential into persistent
-    state. Workspace backups and full-machine packs are therefore always treated
-    as potentially secret-bearing. *)
+    state. The guest's disk is therefore always treated as potentially
+    secret-bearing. *)
 
 type provider =
   | Github

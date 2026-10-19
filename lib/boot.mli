@@ -13,7 +13,7 @@ type purpose =
       (** A normal start: the declared identity is loaded into the agent and
           declared credentials are installed. *)
   | Maintenance
-      (** A bounded export or restore window in a guest ADE does not trust.
+      (** A bounded window, such as provisioning, in a guest ADE does not trust.
           The agent socket exists, because the machine requires one, but holds
           no identity, and no credential is installed. *)
 
@@ -44,8 +44,7 @@ val start :
   (unit, Ade_error.t) result
 (** Start the stopped machine [name] configured by the declaration.
 
-    [name] is passed separately because a restore into a new machine runs
-    under another name than its declaration's. *)
+    [name] is passed separately from the declaration. *)
 
 val stop :
   services:services ->

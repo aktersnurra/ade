@@ -43,25 +43,6 @@ val exec_with_stdin :
 
 val attach : t -> Workbench_name.t -> command:string list -> (unit, Ade_error.t) result
 
-val attach_volume :
-  t -> Workbench_name.t -> host:string -> guest:string -> read_only:bool ->
-  (unit, Ade_error.t) result
-(** Attach a host directory to a stopped machine. Used only for the bounded
-    maintenance mounts a reimage transaction needs; a maintenance mount never
-    targets /workspace, which would hide the storage being exported. *)
-
-val detach_volume :
-  t -> Workbench_name.t -> guest:string -> (unit, Ade_error.t) result
-
-val copy_to_guest :
-  t -> Workbench_name.t -> source:string -> destination:string ->
-  (unit, Ade_error.t) result
-(** Copy one host file into the guest. Not the workspace transfer mechanism:
-    an individual transfer is capped below 4 GiB. *)
-
-val pack : t -> Workbench_name.t -> output:string -> (unit, Ade_error.t) result
-(** Create a full machine artifact. Upstream requires a stopped source. *)
-
 val parse_state : string -> (state, string) result
 (** Exposed for tests: map one SmolVM state string onto the ADT. *)
 
