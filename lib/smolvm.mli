@@ -14,7 +14,10 @@ type t
 val make : executable:string -> runner:Process_runner.t -> t
 
 val state : t -> Workbench_name.t -> (state, Ade_error.t) result
-val create : t -> Declaration.t -> (unit, Ade_error.t) result
+val create :
+  t -> Declaration.t -> mounts:Host_mount.resolved list -> (unit, Ade_error.t) result
+(** [mounts] are applied at creation only. A machine created before a mount was
+    declared does not gain it until it is recreated. *)
 val start : ?ssh_auth_sock:string -> t -> Workbench_name.t -> (unit, Ade_error.t) result
 val stop : t -> Workbench_name.t -> (unit, Ade_error.t) result
 val delete : t -> Workbench_name.t -> (unit, Ade_error.t) result
@@ -62,5 +65,5 @@ val pack : t -> Workbench_name.t -> output:string -> (unit, Ade_error.t) result
 val parse_state : string -> (state, string) result
 (** Exposed for tests: map one SmolVM state string onto the ADT. *)
 
-val create_argv : Declaration.t -> string list
+val create_argv : Declaration.t -> mounts:Host_mount.resolved list -> string list
 (** Exposed for tests: the exact argv used to create a machine. *)

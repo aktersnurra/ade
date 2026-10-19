@@ -86,8 +86,11 @@ let backup ~smolvm ~paths ~declaration ~destination =
   in
   Ok { performed = [ "export"; "validate"; "restore-state" ]; manifest_digest = Some digest }
 
+let create_machine smolvm ~paths declaration =
+  let* mounts = Host_mount.for_declaration ~paths declaration in
+  Smolvm.create smolvm declaration ~mounts
+
 let restore ~smolvm ~paths ~declaration ~archive ~mode =
-  ignore paths;
   let staging = Filename.dirname archive in
   let* digest = validate_export staging in
   let* target =
@@ -98,7 +101,7 @@ let restore ~smolvm ~paths ~declaration ~archive ~mode =
         if state <> Smolvm.Absent then
           Error (failed "restore" "the target machine already exists")
         else
-          let* () = Smolvm.create smolvm declaration in
+          let* () = create_machine smolvm ~paths declaration in
           Ok target
   in
   let* () = restore_workspace smolvm target ~staging in
@@ -157,7 +160,7 @@ let reimage ~smolvm ~paths ~declaration ~force_quiesce =
         let* () =
           write { verified with Reimage.phase = Reimage.Old_machine_deleted }
         in
-        let* () = Smolvm.create smolvm declaration in
+        let* () = create_machine smolvm ~paths declaration in
         let* () =
           write { verified with Reimage.phase = Reimage.New_machine_created }
         in

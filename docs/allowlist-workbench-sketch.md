@@ -22,8 +22,9 @@ It borrows from how Jane Street sandboxes agents (Signals and Threads, episode
   warnings-as-errors and read reference solutions to pass.
 
 Jane Street does this with bubblewrap, pasta and seccomp on Linux dev boxes.
-ADE runs on macOS, where none of those exist, so the VM stays the boundary. What
-changes is what crosses it.
+ADE has to work on both macOS workstations and Linux machines (Artix), and
+macOS has none of those. So the VM stays the boundary on both: SmolVM uses
+Hypervisor.framework on macOS and KVM on Linux. What changes is what crosses it.
 
 ## The boundary, in one picture
 
@@ -115,6 +116,9 @@ deciding to:
 - `.git/hooks/*` runs on your next commit, checkout or merge.
 - `.git/config` can set `core.fsmonitor`, `core.pager`, aliases, or
   `filter.*.smudge` and `clean`. Each is a command git runs on the host.
+- `.jj/` holds jj's operation log, the repository store and, depending on
+  the jj version, repository config (aliases, `fix.tools`, editors, signing
+  programs). The guest could rewrite history or the commands jj runs.
 - Editor auto-run config, such as `.vscode/tasks.json` or an exrc `.nvim.lua`.
   direnv is safe by default, because a changed `.envrc` needs `direnv allow`.
 
@@ -134,6 +138,10 @@ guest: git -C /workspace/project-a bundle create /outbox/project-a.bundle --bran
 host:  validate the bundle (git bundle verify, run with an empty config)
 host:  git -C ~/code/project-a fetch <bundle> 'refs/heads/*:refs/remotes/agents/*'
 ```
+
+With jj (colocated with git), the host side is `jj git fetch` from the same
+bundle, or a `git fetch` followed by `jj git import`. The agent can use jj or
+git inside the VM; only the bundle crosses.
 
 Fetching from a bundle never reads the agent's config or runs its hooks. The
 same is not true of fetching straight from the agent's clone over a local path,

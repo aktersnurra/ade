@@ -19,6 +19,13 @@ let drift_of t declaration =
          declaration digests per machine, which the design rules out. *)
       Ok None
 
+(* Mounts are resolved immediately before creation, on the host that will run
+   the machine, so a symlink swapped after the declaration was written is
+   still caught. *)
+let create_machine t declaration =
+  let* mounts = Host_mount.for_declaration ~paths:t.paths declaration in
+  Smolvm.create t.smolvm declaration ~mounts
+
 let with_lock t declaration action =
   Workbench_lock.with_lock t.paths (Declaration.name declaration) action
 
@@ -28,7 +35,7 @@ let create t declaration =
       let* state = Smolvm.state t.smolvm name in
       match state with
       | Smolvm.Absent ->
-          let* () = Smolvm.create t.smolvm declaration in
+          let* () = create_machine t declaration in
           Ok Changed
       | _ -> (
           (* Creating an existing machine is a no-op when it matches, and a
@@ -53,7 +60,7 @@ let ensure_running t declaration =
       let* () = Smolvm.start t.smolvm name in
       Ok Changed
   | Smolvm.Absent ->
-      let* () = Smolvm.create t.smolvm declaration in
+      let* () = create_machine t declaration in
       let* () = Smolvm.start t.smolvm name in
       Ok Changed
 

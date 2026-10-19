@@ -85,7 +85,7 @@ let state t name =
 
 (* One place builds the create argv, so the declaration is the only source of a
    machine's resources and network posture. *)
-let create_argv declaration =
+let create_argv declaration ~mounts =
   let name = Workbench_name.to_string (Declaration.name declaration) in
   let resources = Declaration.resources declaration in
   (* A locally built image is passed by path. SmolVM would otherwise try to
@@ -119,9 +119,14 @@ let create_argv declaration =
         @ List.concat_map (fun host -> [ "--allow-host"; host ]) hosts
         @ List.concat_map (fun cidr -> [ "--allow-cidr"; cidr ]) cidrs
   in
-  base @ network
+  (* Only mounts that passed the host policy reach the runtime, and the runtime
+     re-checks each source against its own list of system paths. *)
+  let volumes =
+    List.concat_map (fun mount -> [ "--volume"; Host_mount.volume_spec mount ]) mounts
+  in
+  base @ network @ volumes
 
-let create t declaration = succeeded t (create_argv declaration)
+let create t declaration ~mounts = succeeded t (create_argv declaration ~mounts)
 
 let start ?ssh_auth_sock t name =
   let argv = [ "machine"; "start"; "--name"; Workbench_name.to_string name ] in

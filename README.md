@@ -58,6 +58,33 @@ Every command states an intended end state and is safe to repeat. Creating an
 existing machine converges rather than recreating it, which would destroy the
 workspace.
 
+## Mounts
+
+Nothing on the host is visible in a workbench unless its declaration mounts it:
+
+```toml
+[[mount]]
+host = "~/code/project-a"
+guest = "/src/project-a"        # read-only unless mode = "rw"
+
+[[mount]]
+host = "~/scratch/data"
+guest = "/work/data"
+mode = "rw"
+```
+
+Each host path is resolved, symlinks included, on the host that creates the
+machine. ADE refuses the home directory and its ancestors; credential and
+configuration stores (`~/.ssh`, `~/.gnupg`, `~/.config`, `~/.local/share`,
+`~/Library` and similar); and its own state and declarations. It also refuses
+a writable mount containing `.git` or `.jj`, because hooks, VCS config and
+the jj operation log all act on the host the next time you run git or jj
+there. Guest paths may not overlap each other or `/workspace`, `/run` and
+the other system paths.
+
+Mounts are applied when the machine is created. Adding one to an existing
+workbench takes effect after it is recreated.
+
 ## Trust model
 
 A workbench VM is one security principal. Agents, tools and containers inside
