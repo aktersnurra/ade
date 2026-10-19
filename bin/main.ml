@@ -116,6 +116,10 @@ let exec_command =
     (Cmd.info "exec" ~doc:"Run one command inside the workbench")
     Term.(const run $ name_argument $ command_argument)
 
+let provision_command =
+  simple_command "provision" "Re-run the declared provisioning script (workbench must be stopped)"
+    Lifecycle.provision
+
 let rm_command =
   let open Cmdliner in
   let yes =
@@ -143,6 +147,7 @@ let commands =
     attach_command;
     exec_command;
     status_command;
+    provision_command;
     rm_command;
   ]
 

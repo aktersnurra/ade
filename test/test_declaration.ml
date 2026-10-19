@@ -160,6 +160,68 @@ let mounts_change_the_digest () =
 let rejects_mount fragment ?mode ~guest () =
   rejects fragment (with_mounts (mount_table ?mode ~host:"/data" ~guest ())) ()
 
+let provisioned ~posture ~hosts =
+  let network =
+    if hosts then {|posture = "allowlisted"
+hosts = ["geo.mirror.pkgbuild.com"]|}
+    else Printf.sprintf {|posture = "%s"|} posture
+  in
+  Printf.sprintf
+    {|name = "work"
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "../provision/arch.sh"
+
+[resources]
+cpus = 2
+memory_mib = 2048
+overlay_gib = 8
+workspace_gib = 16
+
+[network]
+%s
+
+[backup]
+directory = "/tmp/b"
+keep = 1
+|}
+    network
+
+let load_ok contents =
+  match Declaration.load (write_temp contents) with
+  | Ok declaration -> declaration
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+
+(* A registry tag is accepted without a digest: the guest runs pacman -Syu, so
+   pinning the base image would not pin what the agents actually run. *)
+let image_without_digest_is_accepted () =
+  let declaration = load_ok (provisioned ~posture:"" ~hosts:true) in
+  match Declaration.image declaration with
+  | Declaration.Registry { reference } ->
+      Alcotest.(check string) "reference" "docker.io/menci/archlinuxarm:base-devel" reference
+  | Declaration.Local_artifact _ -> Alcotest.fail "expected a registry image"
+
+let provision_is_relative_to_the_declaration () =
+  let path = write_temp (provisioned ~posture:"" ~hosts:true) in
+  match Declaration.load path with
+  | Error error -> Alcotest.failf "load: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check (option string)) "resolved"
+        (Some (Filename.concat (Filename.dirname path) "../provision/arch.sh"))
+        (Declaration.provision declaration)
+
+let provision_is_optional () =
+  Alcotest.(check (option string)) "none" None
+    (Declaration.provision (load_ok valid_toml))
+
+let provision_changes_the_digest () =
+  Alcotest.(check bool) "differs" false
+    (Declaration.digest_hex (load_ok (provisioned ~posture:"" ~hosts:true))
+     = Declaration.digest_hex
+         (load_ok
+            (replace_line ~find:{|provision = "../provision/arch.sh"|}
+               ~replace:{|provision = "../provision/other.sh"|}
+               (provisioned ~posture:"" ~hosts:true))))
+
 let () =
   Alcotest.run "declaration"
     [ ( "valid",
@@ -169,12 +231,15 @@ let () =
         [ Alcotest.test_case "missing file" `Quick missing_file;
           Alcotest.test_case "unknown key" `Quick
             (rejects "unknown" (valid_toml ^ "\nsurprise = true\n"));
-          Alcotest.test_case "missing digest" `Quick
+          Alcotest.test_case "malformed digest" `Quick
             (rejects "digest"
                (replace_line
                   ~find:{|image = "docker.io/library/ade-workstation@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"|}
-                  ~replace:{|image = "docker.io/library/ade-workstation:latest"|}
+                  ~replace:{|image = "docker.io/library/ade-workstation@sha256:abc"|}
                   valid_toml));
+          Alcotest.test_case "sealed with provision" `Quick
+            (rejects "provision"
+               (provisioned ~posture:"sealed" ~hosts:false));
           Alcotest.test_case "sealed with hosts" `Quick
             (rejects "sealed"
                (replace_line ~find:{|posture = "allowlisted"|}
@@ -187,6 +252,11 @@ let () =
             (rejects "workbench name"
                (replace_line ~find:{|name = "work"|} ~replace:{|name = "work bench"|}
                   valid_toml)) ] );
+      ( "image and provisioning",
+        [ Alcotest.test_case "tag without digest" `Quick image_without_digest_is_accepted;
+          Alcotest.test_case "provision path" `Quick provision_is_relative_to_the_declaration;
+          Alcotest.test_case "no provision" `Quick provision_is_optional;
+          Alcotest.test_case "provision moves the digest" `Quick provision_changes_the_digest ] );
       ( "mounts",
         [ Alcotest.test_case "parse" `Quick mounts_parse_in_order_and_default_read_only;
           Alcotest.test_case "none by default" `Quick no_mounts_by_default;

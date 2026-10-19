@@ -27,6 +27,7 @@ type t = {
   path : string;
   name : Workbench_name.t;
   image : image;
+  provision : string option;
   resources : resources;
   network : network;
   ssh : ssh;
@@ -48,6 +49,7 @@ let image_digest d =
       | Some at -> String.sub reference (at + 1) (String.length reference - at - 1)
       | None -> reference)
   | Local_artifact { digest; _ } -> digest
+let provision d = d.provision
 let resources d = d.resources
 let network d = d.network
 let ssh d = d.ssh
@@ -104,10 +106,10 @@ let as_string_list context = function
 let positive context value =
   if value <= 0 then fail (context ^ " must be greater than zero") else value
 
-(* The image must be pinned by immutable digest. A moving tag would silently
-   change the trusted execution substrate between reimages. *)
-(* A digest is required whichever form the image takes: a moving tag would
-   silently change the trusted execution substrate between reimages. *)
+(* A digest, when one is written, must be well formed. It is optional for a
+   registry image: the guest runs pacman -Syu, so pinning the base image would
+   not pin what the agents run. A local artifact has nothing else to identify
+   it and still requires one. *)
 let validate_digest digest =
   let prefix = "sha256:" in
   let prefix_length = String.length prefix in
@@ -140,10 +142,12 @@ let parse_image value =
     let path, digest = split_on_digest rest in
     if path = "" then fail "the local image reference names no path"
     else Local_artifact { path; digest = validate_digest digest }
-  else
+  else if image = "" then fail "the image reference names no image"
+  else if String.contains image '@' then
     let name, digest = split_on_digest image in
     if name = "" then fail "the image reference names no image"
     else Registry { reference = name ^ "@" ^ validate_digest digest }
+  else Registry { reference = image }
 
 let parse_cidr value =
   match String.index_opt value '/' with
@@ -338,7 +342,7 @@ let sub_table root key context =
 
 let parse ~path root =
   reject_unknown ~context:"the declaration" root
-    [ "name"; "image"; "resources"; "network"; "services"; "ssh";
+    [ "name"; "image"; "provision"; "resources"; "network"; "services"; "ssh";
       "backup"; "mount"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
@@ -350,6 +354,20 @@ let parse ~path root =
   let image = parse_image (require root "image" "the declaration") in
   let resources = parse_resources (sub_table root "resources" "the declaration") in
   let network = parse_network (sub_table root "network" "the declaration") in
+  (* Relative to the declaration, so a checkout can move without editing it. *)
+  let provision =
+    Option.map
+      (fun value ->
+        let script = as_string "provision" value in
+        if script = "" then fail "provision must not be empty";
+        if Filename.is_relative script then Filename.concat (Filename.dirname path) script
+        else script)
+      (find root "provision")
+  in
+  (* Provisioning installs packages, so it needs the network; a sealed
+     workbench has none, and failing at parse beats failing at create. *)
+  if provision <> None && network = Sealed then
+    fail "provision needs a network, but this workbench is sealed";
   let docker_enabled, herdr_enabled =
     match find root "services" with
     | Some table -> parse_services table
@@ -370,7 +388,7 @@ let parse ~path root =
     | None -> None
   in
   {
-    path; name; image; resources; network; ssh; docker_enabled; herdr_enabled;
+    path; name; image; provision; resources; network; ssh; docker_enabled; herdr_enabled;
     backup; mounts; github_credential;
   }
 
@@ -393,6 +411,7 @@ let canonical d =
   let line key value = Buffer.add_string buffer (key ^ "=" ^ value ^ "\n") in
   line "name" (Workbench_name.to_string d.name);
   line "image" (image_digest d);
+  line "provision" (Option.value d.provision ~default:"");
   line "cpus" (string_of_int d.resources.cpus);
   line "memory_mib" (string_of_int d.resources.memory_mib);
   line "overlay_gib" (string_of_int d.resources.overlay_gib);

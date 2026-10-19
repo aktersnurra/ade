@@ -6,7 +6,8 @@
 
 type image =
   | Registry of { reference : string }
-      (** A registry reference pinned by digest, e.g. [name@sha256:...]. *)
+      (** A registry reference, e.g. [name:tag]. A digest ([name@sha256:...])
+          is optional but checked when present. *)
   | Local_artifact of { path : string; digest : string }
       (** A tarball on the host, still pinned by the digest of the image it
           contains. A workbench built from a locally produced image cannot pull
@@ -52,6 +53,10 @@ val image_digest : t -> string
 (** The pinned digest, whichever form the image takes. Drift comparison and the
     declaration digest use this, so moving an image between a registry and a
     local artifact is not a change of identity. *)
+val provision : t -> string option
+(** The provisioning script's path, resolved against the directory of the
+    declaration file. Never set on a sealed workbench. *)
+
 val resources : t -> resources
 val network : t -> network
 val ssh : t -> ssh

@@ -29,13 +29,51 @@ let create_machine t declaration =
 let with_lock t declaration action =
   Workbench_lock.with_lock t.paths (Declaration.name declaration) action
 
+let halt t name = Boot.stop ~services:t.services ~smolvm:t.smolvm ~paths:t.paths name
+
+let read_file path =
+  try Ok (In_channel.with_open_bin path In_channel.input_all)
+  with Sys_error reason ->
+    Error (Ade_error.Declaration_invalid { path; reason })
+
+(* The script runs under a Maintenance boot: the guest is installing software
+   from the network, so it holds neither the SSH identity nor credentials. The
+   machine is stopped whether or not the script succeeded, so a failure never
+   leaves a half-provisioned guest running with the agents' access. *)
+let run_provision t declaration script =
+  let name = Declaration.name declaration in
+  let* source = read_file script in
+  let* () =
+    Boot.start ~services:t.services ~smolvm:t.smolvm ~paths:t.paths ~name
+      ~purpose:Boot.Maintenance declaration
+  in
+  let ran =
+    match Smolvm.exec_with_stdin t.smolvm name [ "bash"; "-s" ] ~stdin:source with
+    | Error _ as error -> error
+    | Ok { Process_runner.status = 0; _ } -> Ok ()
+    | Ok { Process_runner.status; stderr; _ } ->
+        Error (Ade_error.Runtime_failed { argv = [ "provision"; script ]; status; stderr })
+  in
+  let stopped = halt t name in
+  let* () = ran in
+  stopped
+
+(* A machine is only useful once provisioned, so creation and provisioning are
+   one step; a failed script leaves the machine created and stopped for
+   [ade provision] to retry. *)
+let create_and_provision t declaration =
+  let* () = create_machine t declaration in
+  match Declaration.provision declaration with
+  | None -> Ok ()
+  | Some script -> run_provision t declaration script
+
 let create t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
       let* state = Smolvm.state t.smolvm name in
       match state with
       | Smolvm.Absent ->
-          let* () = create_machine t declaration in
+          let* () = create_and_provision t declaration in
           Ok Changed
       | _ -> (
           (* Creating an existing machine is a no-op when it matches, and a
@@ -64,11 +102,9 @@ let ensure_running t declaration =
       let* () = boot t declaration in
       Ok Changed
   | Smolvm.Absent ->
-      let* () = create_machine t declaration in
+      let* () = create_and_provision t declaration in
       let* () = boot t declaration in
       Ok Changed
-
-let halt t name = Boot.stop ~services:t.services ~smolvm:t.smolvm ~paths:t.paths name
 
 let start t declaration = with_lock t declaration (fun () -> ensure_running t declaration)
 
@@ -97,6 +133,29 @@ let restart t declaration =
       in
       let* _ = ensure_running t declaration in
       Ok Changed)
+
+let provision t declaration =
+  with_lock t declaration (fun () ->
+      let name = Declaration.name declaration in
+      match Declaration.provision declaration with
+      | None ->
+          Error
+            (Ade_error.Operation_refused
+               { operation = "provision"; reason = "the declaration names no provision script" })
+      | Some script -> (
+          let* state = Smolvm.state t.smolvm name in
+          match state with
+          | Smolvm.Running ->
+              Error
+                (Ade_error.Operation_refused
+                   { operation = "provision";
+                     reason = "the workbench is running; stop it first" })
+          | Smolvm.Absent ->
+              let* () = create_and_provision t declaration in
+              Ok Changed
+          | Smolvm.Created | Smolvm.Stopped ->
+              let* () = run_provision t declaration script in
+              Ok Changed))
 
 let remove t declaration =
   with_lock t declaration (fun () ->

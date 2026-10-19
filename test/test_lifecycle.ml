@@ -20,6 +20,8 @@ type fake = {
   mutable state : string;
   mutable calls : string list;
   mutable last_argv : string list;
+  mutable stdins : string list;
+  mutable exec_status : int;
 }
 
 let runner fake request =
@@ -30,6 +32,7 @@ let runner fake request =
   in
   fake.calls <- subcommand :: fake.calls;
   fake.last_argv <- request.Process_runner.argv;
+  Option.iter (fun stdin -> fake.stdins <- stdin :: fake.stdins) request.Process_runner.stdin;
   match subcommand with
   | "status" ->
       if fake.state = "absent" then
@@ -50,6 +53,8 @@ let runner fake request =
   | "stop" ->
       fake.state <- "stopped";
       Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
+  | "exec" ->
+      Ok { Process_runner.status = fake.exec_status; stdout = ""; stderr = "pacman: boom" }
   | "delete" ->
       fake.state <- "absent";
       Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
@@ -61,7 +66,7 @@ let temp_root () =
   path
 
 let setup_with_paths initial =
-  let fake = { state = initial; calls = []; last_argv = [] } in
+  let fake = { state = initial; calls = []; last_argv = []; stdins = []; exec_status = 0 } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
   let paths = State_paths.make ~root:(temp_root ()) () in
   (fake, paths, Lifecycle.make ~services ~smolvm ~paths)
@@ -152,6 +157,78 @@ let removing_an_absent_machine_converges () =
   let _, lifecycle = setup "absent" in
   check_outcome "remove" Lifecycle.Converged (Lifecycle.remove lifecycle (declaration ()))
 
+(* Provisioning installs the guest's tooling once, in a window where the guest
+   has no identity and no credentials; the machine is stopped afterwards. *)
+let provisioned_declaration () =
+  let script = Filename.temp_file "ade-provision-" ".sh" in
+  let channel = open_out script in
+  output_string channel "echo provisioned\n";
+  close_out channel;
+  let path = Filename.temp_file "ade-decl-" ".toml" in
+  let channel = open_out path in
+  Printf.fprintf channel
+    {|name = "work"
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "%s"
+
+[resources]
+cpus = 2
+memory_mib = 2048
+overlay_gib = 8
+workspace_gib = 16
+
+[network]
+posture = "public"
+
+[backup]
+directory = "/tmp/b"
+keep = 1
+|}
+    script;
+  close_out channel;
+  match Declaration.load path with
+  | Ok declaration -> declaration
+  | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+
+let calls fake = List.rev fake.calls
+
+let creating_provisions_once_then_stops () =
+  let fake, lifecycle = setup "absent" in
+  check_outcome "create" Lifecycle.Changed
+    (Lifecycle.create lifecycle (provisioned_declaration ()));
+  Alcotest.(check (list string)) "order" [ "create"; "start"; "exec"; "stop" ]
+    (List.filter (fun c -> c <> "status") (calls fake));
+  Alcotest.(check (list string)) "script on stdin" [ "echo provisioned\n" ] fake.stdins;
+  Alcotest.(check string) "stopped" "stopped" fake.state
+
+let a_failed_provision_stops_the_machine_and_reports () =
+  let fake, lifecycle = setup "absent" in
+  fake.exec_status <- 1;
+  (match Lifecycle.create lifecycle (provisioned_declaration ()) with
+   | Ok _ -> Alcotest.fail "expected the failed script to be an error"
+   | Error _ -> ());
+  Alcotest.(check string) "stopped" "stopped" fake.state
+
+let provision_reruns_on_a_stopped_machine () =
+  let fake, lifecycle = setup "stopped" in
+  check_outcome "provision" Lifecycle.Changed
+    (Lifecycle.provision lifecycle (provisioned_declaration ()));
+  Alcotest.(check int) "ran" 1 (List.length fake.stdins);
+  Alcotest.(check string) "stopped" "stopped" fake.state
+
+let provision_refuses_a_running_machine () =
+  let fake, lifecycle = setup "running" in
+  (match Lifecycle.provision lifecycle (provisioned_declaration ()) with
+   | Ok _ -> Alcotest.fail "expected a refusal"
+   | Error _ -> ());
+  Alcotest.(check (list string)) "nothing ran" [] fake.stdins
+
+let provision_without_a_script_is_refused () =
+  let _, lifecycle = setup "stopped" in
+  match Lifecycle.provision lifecycle (declaration ()) with
+  | Ok _ -> Alcotest.fail "expected a refusal"
+  | Error _ -> ()
+
 let attaching_to_a_stopped_machine_starts_it () =
   let fake, lifecycle = setup "stopped" in
   (match Lifecycle.attach lifecycle (declaration ()) ~command:[] with
@@ -213,6 +290,12 @@ let () =
       ( "remove",
         [ Alcotest.test_case "running" `Quick removing_a_running_machine_deletes_it_and_its_state;
           Alcotest.test_case "absent" `Quick removing_an_absent_machine_converges ] );
+      ( "provision",
+        [ Alcotest.test_case "on create" `Quick creating_provisions_once_then_stops;
+          Alcotest.test_case "failure" `Quick a_failed_provision_stops_the_machine_and_reports;
+          Alcotest.test_case "rerun" `Quick provision_reruns_on_a_stopped_machine;
+          Alcotest.test_case "running" `Quick provision_refuses_a_running_machine;
+          Alcotest.test_case "no script" `Quick provision_without_a_script_is_refused ] );
       ( "attach",
         [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
           Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );
