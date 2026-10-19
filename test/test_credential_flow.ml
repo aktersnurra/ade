@@ -47,10 +47,10 @@ let setup () =
   let run = runner fake in
   (fake, run, Smolvm.make ~executable:"/usr/bin/true" ~runner:run)
 
-let ok_http body ~url:_ ~bearer:_ = Ok (201, body)
+let ok_http body ~url:_ ~bearer:_ ~body:_ = Ok (201, body)
 
 let token_body =
-  Printf.sprintf {|{"token":"%s","expires_at":"2025-08-29T21:40:00Z"}|} minted_token
+  Printf.sprintf {|{"token":"%s","expires_at":"2025-08-29T21:40:00Z","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","metadata":"read"}}|} minted_token
 
 let rotate ?(http = ok_http token_body) ?config:c ?previous () =
   let fake, run, smolvm = setup () in
@@ -112,7 +112,7 @@ let the_minted_token_is_delivered_on_stdin () =
 (* An over-broad configuration must be refused before GitHub is contacted. *)
 let an_unscoped_configuration_never_reaches_github () =
   let contacted = ref false in
-  let http ~url:_ ~bearer:_ =
+  let http ~url:_ ~bearer:_ ~body:_ =
     contacted := true;
     Ok (201, token_body)
   in
@@ -125,7 +125,7 @@ let an_unscoped_configuration_never_reaches_github () =
 (* A refused exchange must not install anything: the previous generation stays
    active rather than being replaced by nothing. *)
 let a_refused_exchange_installs_nothing () =
-  let http ~url:_ ~bearer:_ = Ok (401, {|{"message":"unauthorized"}|}) in
+  let http ~url:_ ~bearer:_ ~body:_ = Ok (401, {|{"message":"unauthorized"}|}) in
   let fake, result = rotate ~http () in
   (match result with
    | Ok _ -> Alcotest.fail "expected a 401 to fail the rotation"
@@ -136,7 +136,7 @@ let a_refused_exchange_installs_nothing () =
        fake.requests)
 
 let a_transport_failure_is_reported () =
-  let http ~url:_ ~bearer:_ = Error "connection refused" in
+  let http ~url:_ ~bearer:_ ~body:_ = Error "connection refused" in
   let _, result = rotate ~http () in
   match result with
   | Ok _ -> Alcotest.fail "expected a transport failure to be reported"

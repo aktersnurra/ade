@@ -95,7 +95,7 @@
 (test
  (name test_github_credential)
  (modules test_github_credential)
- (libraries ade alcotest))
+ (libraries ade alcotest yojson))
 
 (test
  (name test_secret)
