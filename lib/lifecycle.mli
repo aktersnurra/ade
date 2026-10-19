@@ -20,6 +20,12 @@ val start : t -> Declaration.t -> (outcome, Ade_error.t) result
 val stop : t -> Declaration.t -> (outcome, Ade_error.t) result
 val restart : t -> Declaration.t -> (outcome, Ade_error.t) result
 
+val provision : t -> Declaration.t -> (outcome, Ade_error.t) result
+(** Run the declared provisioning script in the stopped machine, booted with no
+    identity and no credentials, then stop it again. Refused while the machine
+    runs, because stopping it would cut off whatever the agents are doing.
+    [create] and [start] run it once, right after creating the machine. *)
+
 val remove : t -> Declaration.t -> (outcome, Ade_error.t) result
 (** Stop the machine if it runs, delete it, release its host agent and forget
     ADE's state for it. The workspace goes with the machine, so the CLI asks
