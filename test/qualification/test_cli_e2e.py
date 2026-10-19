@@ -123,6 +123,11 @@ class CliEndToEndTest(unittest.TestCase):
         self.assertIn("hello", result.stdout)
         self.assertEqual(self.machines().get("work"), "running")
 
+    def test_exec_exits_with_the_guest_status(self):
+        self.ade("create", "work")
+        result = self.ade("exec", "work", "exit", "3")
+        self.assertEqual(result.returncode, 3, msg=result.stderr)
+
     def test_create_uses_declared_resources_and_allowlist(self):
         self.ade("create", "work")
         create_calls = [line for line in self.calls() if line.startswith("machine create")]

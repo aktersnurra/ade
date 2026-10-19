@@ -29,7 +29,7 @@
 (test
  (name test_lifecycle)
  (modules test_lifecycle)
- (libraries ade alcotest)
+ (libraries ade alcotest unix)
  (deps (glob_files %{project_root}/workbenches/*)))
 
 (test

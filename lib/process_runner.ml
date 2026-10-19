@@ -73,6 +73,10 @@ let status_code = function
   | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
 let run request =
+  (* A child that exits without reading its stdin would otherwise deliver
+     SIGPIPE to ADE on the next write and kill it; the write's EPIPE is
+     already handled in [pump]. *)
+  Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
   if not (Sys.file_exists request.executable) then
     Error (Ade_error.Runtime_unavailable { executable = request.executable })
   else
