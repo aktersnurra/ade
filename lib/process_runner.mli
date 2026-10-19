@@ -21,6 +21,9 @@ type output = { status : int; stdout : string; stderr : string }
 type t = request -> (output, Ade_error.t) result
 (** A runner. Tests substitute a fake for the real process boundary. *)
 
+val find_executable : string -> string option
+(** Search [PATH] for an executable. The runner needs an absolute path. *)
+
 val run : t
 val replace_process : request -> (unit, Ade_error.t) result
 
