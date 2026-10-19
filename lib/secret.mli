@@ -17,13 +17,17 @@ type source =
       (** A macOS Keychain generic password, read via the [security] tool. *)
   | File of { path : string }
       (** A protected host path. The file is read at use time, never cached. *)
+  | Pass of { entry : string }
+      (** A [pass] (password-store) entry, read via [pass show]. The whole
+          entry is the secret, so a multi-line SSH key or PEM survives intact. *)
 
 val keychain : item:string -> t
 val file : path:string -> t
+val pass : entry:string -> t
 
 val of_reference : string -> (t, string) result
-(** Parse a declaration's reference, e.g. ["keychain:ade-work-ssh"] or
-    ["file:~/.config/ade/key.pem"]. A bare path is treated as a file, so
+(** Parse a declaration's reference, e.g. ["keychain:ade-work-ssh"],
+    ["pass:ade/work-ssh"] or ["file:~/.config/ade/key.pem"]. A bare path is treated as a file, so
     existing declarations keep working.
 
     Deliberately the only way to build a [t] from configuration: it takes a

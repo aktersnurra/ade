@@ -10,7 +10,7 @@ type outcome =
 
 type t
 
-val make : smolvm:Smolvm.t -> paths:State_paths.t -> t
+val make : services:Boot.services -> smolvm:Smolvm.t -> paths:State_paths.t -> t
 
 val create : t -> Declaration.t -> (outcome, Ade_error.t) result
 (** Creating an absent machine creates it. Creating an existing machine succeeds

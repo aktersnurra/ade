@@ -18,6 +18,12 @@ val is_populated : t -> bool
 (** Whether an identity has been loaded. A maintenance agent is deliberately
     empty. *)
 
+val pid : t -> string
+
+val of_record : socket:string -> pid:string -> populated:bool -> t
+(** Rebuild a handle from what an earlier ADE process recorded, so the process
+    that stops a workbench can stop the agent another process started. *)
+
 type mode =
   | Populated
       (** A normal start: the declared identity is loaded and the workbench can

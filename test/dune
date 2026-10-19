@@ -122,3 +122,8 @@
  (name test_host_mount)
  (modules test_host_mount)
  (libraries ade alcotest unix))
+
+(test
+ (name test_boot)
+ (modules test_boot)
+ (libraries ade alcotest))

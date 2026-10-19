@@ -1,5 +1,18 @@
 open Ade
 
+(* Host effects are inert here: no real ssh-agent, no GitHub. Boot's own
+   sequencing is tested in test_boot. *)
+let services =
+  {
+    Boot.start_agent =
+      (fun ~name:_ ~mode ~identity:_ ->
+        Ok
+          (Ssh_agent.of_record ~socket:"/nonexistent/agent.sock" ~pid:"0"
+             ~populated:(mode = Ssh_agent.Populated)));
+    stop_agent = (fun _ -> Ok ());
+    install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+  }
+
 (* Crash injection at every journal boundary.
 
    Reimage is the one operation where a defect costs a workspace, so each test
@@ -105,7 +118,7 @@ let render_recovery = function
    action is to resume: nothing irreversible has happened. *)
 let a_crash_during_export_leaves_the_machine_intact () =
   let fake, smolvm, paths = setup ~fail_verb:"exec" "stopped" in
-  let _ = Maintenance.reimage ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
+  let _ = Maintenance.reimage ~services ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
   Alcotest.(check bool) "machine not deleted" false (List.mem "delete" fake.calls);
   Alcotest.(check string) "resumable" "resume"
     (render_recovery (Reimage.recovery_for (journal_after paths)))
@@ -211,15 +224,15 @@ let pre_deletion_phases_report_no_damage () =
 let an_unfinished_transaction_blocks_a_new_reimage () =
   let _, smolvm, paths = setup ~fail_verb:"exec" "stopped" in
   let d = declaration () in
-  let _ = Maintenance.reimage ~smolvm ~paths ~declaration:d ~force_quiesce:true in
-  match Maintenance.reimage ~smolvm ~paths ~declaration:d ~force_quiesce:true with
+  let _ = Maintenance.reimage ~services ~smolvm ~paths ~declaration:d ~force_quiesce:true in
+  match Maintenance.reimage ~services ~smolvm ~paths ~declaration:d ~force_quiesce:true with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected an unfinished transaction to block a new reimage"
 
 (* The journal must survive a crash: recovery depends on reading it back. *)
 let the_journal_survives_a_crash () =
   let _, smolvm, paths = setup ~fail_verb:"exec" "stopped" in
-  let _ = Maintenance.reimage ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
+  let _ = Maintenance.reimage ~services ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
   match journal_after paths with
   | None -> Alcotest.fail "the journal was lost, so recovery is impossible"
   | Some journal ->

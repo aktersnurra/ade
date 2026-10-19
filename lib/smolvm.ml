@@ -124,7 +124,14 @@ let create_argv declaration ~mounts =
   let volumes =
     List.concat_map (fun mount -> [ "--volume"; Host_mount.volume_spec mount ]) mounts
   in
-  base @ network @ volumes
+  (* The runtime forwards an agent only into a machine created to accept one,
+     and then requires a socket at every start; Boot supplies it. *)
+  let ssh =
+    match Declaration.ssh declaration with
+    | Declaration.Disabled -> []
+    | Declaration.Dedicated_agent _ -> [ "--ssh-agent" ]
+  in
+  base @ network @ volumes @ ssh
 
 let create t declaration ~mounts = succeeded t (create_argv declaration ~mounts)
 

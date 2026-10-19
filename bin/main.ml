@@ -35,7 +35,8 @@ let lifecycle () =
   let smolvm =
     Smolvm.make ~executable:(smolvm_executable ()) ~runner:Process_runner.run
   in
-  Lifecycle.make ~smolvm ~paths:(State_paths.make ())
+  let paths = State_paths.make () in
+  Lifecycle.make ~services:(Boot.default_services ~paths) ~smolvm ~paths
 
 let with_declaration name action =
   match load_declaration name with
@@ -116,6 +117,8 @@ let exec_command =
 let maintenance () =
   Smolvm.make ~executable:(smolvm_executable ()) ~runner:Process_runner.run
 
+let services () = Boot.default_services ~paths:(State_paths.make ())
+
 let report_outcome label (outcome : Maintenance.outcome) =
   Printf.printf "%s: %s\n" label (String.concat ", " outcome.Maintenance.performed);
   match outcome.Maintenance.manifest_digest with
@@ -130,7 +133,7 @@ let backup_command =
   let run name destination =
     with_declaration name (fun _ declaration ->
         Result.map (report_outcome "backup")
-          (Maintenance.backup ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
+          (Maintenance.backup ~services:(services ()) ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
              ~declaration ~destination))
   in
   Cmd.v
@@ -173,7 +176,7 @@ let restore_command =
             in
             Result.bind mode (fun mode ->
                 Result.map (report_outcome "restore")
-                  (Maintenance.restore ~smolvm:(maintenance ())
+                  (Maintenance.restore ~services:(services ()) ~smolvm:(maintenance ())
                      ~paths:(State_paths.make ()) ~declaration ~archive ~mode)))
   in
   Cmd.v
@@ -189,7 +192,7 @@ let reimage_command =
   let run name force_quiesce =
     with_declaration name (fun _ declaration ->
         Result.map (report_outcome "reimage")
-          (Maintenance.reimage ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
+          (Maintenance.reimage ~services:(services ()) ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
              ~declaration ~force_quiesce))
   in
   Cmd.v
@@ -243,7 +246,7 @@ let destroy_command =
             { Destroy.name = Declaration.name declaration; choice; confirmation }
           in
           Result.map (report_outcome "destroy")
-            (Maintenance.destroy ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
+            (Maintenance.destroy ~services:(services ()) ~smolvm:(maintenance ()) ~paths:(State_paths.make ())
                ~declaration ~request ~backup_destination:destination))
   in
   Cmd.v
