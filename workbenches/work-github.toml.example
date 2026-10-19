@@ -43,7 +43,8 @@
 # which repositories are installed matters more than the permission list.
 
 name = "work"
-image = "file:artifacts/ade-nix-workstation-0.1.0.tar@sha256:cca178a64daed733a401f1fd32e5c0889d1427fed43787a6f7c5e9877185a12b"
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "../provision/arch.sh"
 
 [resources]
 cpus = 6
@@ -58,6 +59,13 @@ hosts = [
   "api.github.com",
   "codeload.github.com",
   "objects.githubusercontent.com",
+  # Arch mirrors, the Herdr and Claude Code installers, and the agent API.
+  "geo.mirror.pkgbuild.com",
+  "mirror.archlinuxarm.org",
+  "herdr.dev",
+  "claude.ai",
+  "downloads.claude.ai",
+  "api.anthropic.com",
 ]
 cidrs = []
 

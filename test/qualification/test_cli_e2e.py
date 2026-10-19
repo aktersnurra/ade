@@ -28,6 +28,8 @@ class CliEndToEndTest(unittest.TestCase):
         self.log_file = self.tmp / "calls.log"
         self.declarations = self.tmp / "workbenches"
         shutil.copytree(REPO_ROOT / "workbenches", self.declarations)
+        # Declarations name their provision script relative to themselves.
+        shutil.copytree(REPO_ROOT / "provision", self.tmp / "provision")
         # The shipped declaration with its SSH identity disabled: these tests
         # are about lifecycle convergence, and starting a dedicated agent needs
         # a real ssh-agent and key. test_boot covers the agent sequence.
@@ -80,7 +82,10 @@ class CliEndToEndTest(unittest.TestCase):
     def test_create_then_start_converges(self):
         created = self.ade("create", "work")
         self.assertEqual(created.returncode, 0, msg=created.stderr)
-        self.assertEqual(self.machines().get("work"), "created")
+        # work.toml provisions on create, which boots the machine and stops it.
+        self.assertEqual(self.machines().get("work"), "stopped")
+        execs = [line for line in self.calls() if line.startswith("machine exec")]
+        self.assertEqual(len(execs), 1, "provision script did not run exactly once")
 
         started = self.ade("start", "work")
         self.assertEqual(started.returncode, 0, msg=started.stderr)

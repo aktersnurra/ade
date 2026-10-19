@@ -4,7 +4,8 @@
 # ranges. Anything sensitive belongs in a sealed or allowlisted workbench.
 
 name = "personal"
-image = "file:artifacts/ade-nix-workstation-0.1.0.tar@sha256:cca178a64daed733a401f1fd32e5c0889d1427fed43787a6f7c5e9877185a12b"
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "../provision/arch.sh"
 
 [resources]
 cpus = 4

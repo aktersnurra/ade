@@ -75,8 +75,18 @@ let setup initial =
   let fake, _, lifecycle = setup_with_paths initial in
   (fake, lifecycle)
 
+(* The shipped declaration without its provision line, so these tests are about
+   convergence alone; provisioning has its own group below. *)
 let declaration () =
-  match Declaration.load "../workbenches/work.toml" with
+  let source = In_channel.with_open_bin "../workbenches/work.toml" In_channel.input_all in
+  let kept =
+    String.split_on_char '\n' source
+    |> List.filter (fun line -> not (String.starts_with ~prefix:"provision = " line))
+  in
+  let path = Filename.temp_file "ade-work-" ".toml" in
+  Out_channel.with_open_bin path (fun channel ->
+      Out_channel.output_string channel (String.concat "\n" kept));
+  match Declaration.load path with
   | Ok declaration -> declaration
   | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
 
