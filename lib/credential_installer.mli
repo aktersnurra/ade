@@ -6,8 +6,8 @@
     whole previous generation or the whole new one.
 
     ADE cannot stop guest code copying a credential into persistent state.
-    Workspace backups and machine packs are therefore always treated as
-    potentially secret-bearing. *)
+    The guest's disk is therefore always treated as potentially
+    secret-bearing. *)
 
 type installed = {
   generation : Credential.generation;

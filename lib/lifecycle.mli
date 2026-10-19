@@ -20,6 +20,11 @@ val start : t -> Declaration.t -> (outcome, Ade_error.t) result
 val stop : t -> Declaration.t -> (outcome, Ade_error.t) result
 val restart : t -> Declaration.t -> (outcome, Ade_error.t) result
 
+val remove : t -> Declaration.t -> (outcome, Ade_error.t) result
+(** Stop the machine if it runs, delete it, release its host agent and forget
+    ADE's state for it. The workspace goes with the machine, so the CLI asks
+    for explicit confirmation before calling this. *)
+
 val attach : t -> Declaration.t -> command:string list -> (unit, Ade_error.t) result
 (** Attaching to a stopped machine starts it first. The lock is released before
     the interactive attachment begins. *)

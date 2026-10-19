@@ -98,6 +98,21 @@ let restart t declaration =
       let* _ = ensure_running t declaration in
       Ok Changed)
 
+let remove t declaration =
+  with_lock t declaration (fun () ->
+      let name = Declaration.name declaration in
+      let* state = Smolvm.state t.smolvm name in
+      let* () = match state with Smolvm.Running -> halt t name | _ -> Ok () in
+      let* () =
+        match state with Smolvm.Absent -> Ok () | _ -> Smolvm.delete t.smolvm name
+      in
+      let* () = Boot.release_agent ~services:t.services ~paths:t.paths name in
+      let dir = State_paths.workbench_dir t.paths name in
+      match Bos.OS.Dir.delete ~recurse:true (Fpath.v dir) with
+      | Error (`Msg reason) ->
+          Error (Ade_error.Operation_refused { operation = "rm"; reason })
+      | Ok () -> Ok (if state = Smolvm.Absent then Converged else Changed))
+
 let attach t declaration ~command =
   (* The machine is brought up under the lock, but the lock is released before
      attaching: an interactive session may last hours and must not block every

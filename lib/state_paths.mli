@@ -1,7 +1,7 @@
 (** Where ADE keeps its own host state.
 
-    ADE stores only what it needs: per-workbench locks, active transaction
-    journals, backups and secret-free credential metadata. It keeps no parallel
+    ADE stores only what it needs: per-workbench locks, the recorded host
+    agent and secret-free credential metadata. It keeps no parallel
     database of SmolVM machines. *)
 
 type t
@@ -13,13 +13,13 @@ val make : ?root:string -> unit -> t
 
 val root : t -> string
 val lock_file : t -> Workbench_name.t -> string
-val journal_file : t -> Workbench_name.t -> string
 val ssh_agent_file : t -> Workbench_name.t -> string
 (** Where the running workbench's host agent is recorded, so a later [stop] can
     find and stop it. *)
 
 val credentials_dir : t -> Workbench_name.t -> string
-val staging_dir : t -> Workbench_name.t -> transaction_id:string -> string
+val workbench_dir : t -> Workbench_name.t -> string
+(** Everything ADE keeps for one workbench; removed with the workbench. *)
 
 val ensure_dir : string -> (unit, Ade_error.t) result
 (** Create a directory and its parents if absent. *)

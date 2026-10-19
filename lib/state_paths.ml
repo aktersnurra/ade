@@ -43,9 +43,5 @@ let workbench_dir t name =
   Filename.concat (Filename.concat t.root "workbenches") (Workbench_name.to_string name)
 
 let lock_file t name = Filename.concat (workbench_dir t name) "lock"
-let journal_file t name = Filename.concat (workbench_dir t name) "journal.json"
 let ssh_agent_file t name = Filename.concat (workbench_dir t name) "ssh-agent"
 let credentials_dir t name = Filename.concat (workbench_dir t name) "credentials"
-
-let staging_dir t name ~transaction_id =
-  Filename.concat (Filename.concat (workbench_dir t name) "staging") transaction_id
