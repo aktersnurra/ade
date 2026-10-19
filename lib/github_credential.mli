@@ -51,9 +51,12 @@ type http_post =
 
 val token_url : config -> string
 
+type minted = { value : string; expires_at : float }
+(** A freshly minted installation token and when GitHub says it expires. *)
+
 val exchange :
   post:http_post -> config -> jwt:string -> now:float ->
-  (Provider.minted, error) result
+  (minted, error) result
 (** Exchange a signed App JWT for an installation token scoped to the declared
     repositories and permissions, and refuse the token if GitHub's response
     shows a broader grant. *)

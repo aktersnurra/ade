@@ -338,6 +338,8 @@ let parse_expiry text =
              (((days * 24 + hour) * 60 + minute) * 60 + second)))
   with _ -> None
 
+type minted = { value : string; expires_at : float }
+
 let exchange ~post config ~jwt ~now =
   let* body = request_body config in
   match post ~url:(token_url config) ~bearer:jwt ~body with
@@ -363,5 +365,5 @@ let exchange ~post config ~jwt ~now =
                     | None -> now +. 3600.0)
                 | _ -> now +. 3600.0
               in
-              Ok { Provider.value; expires_at }
+              Ok { value; expires_at }
           | _ -> Error (Malformed_response "response has no token field")))

@@ -10,10 +10,6 @@
 
 type provider =
   | Github
-  | Kubernetes
-  | Ssh
-  | Datadog
-  | Circleci
 
 val provider_to_string : provider -> string
 
@@ -23,17 +19,6 @@ type generation = {
   expires_at : float;
   installed_at : float;
 }
-
-type health =
-  | Healthy
-  | Expiring_soon of { seconds_remaining : float }
-  | Expired of { seconds_ago : float }
-
-val health_of : now:float -> margin_seconds:float -> generation -> health
-(** ADE rotates before expiry using a declared safety margin rather than relying
-    on exact host/provider clock agreement. *)
-
-val needs_rotation : now:float -> margin_seconds:float -> generation -> bool
 
 type validation_error =
   | Empty_value

@@ -41,7 +41,7 @@ let rotate_github ?http ?runner ~smolvm ~name ~config ~now ~previous () =
      returned, logged, or held anywhere it could be read back. *)
   let* installed =
     Credential_installer.install ~smolvm ~name ~provider:Credential.Github
-      ~value:minted.Provider.value ~expires_at:minted.Provider.expires_at ~now
+      ~value:minted.Github_credential.value ~expires_at:minted.Github_credential.expires_at ~now
       ~previous
   in
   Ok

@@ -1,11 +1,7 @@
-type provider = Github | Kubernetes | Ssh | Datadog | Circleci
+type provider = Github
 
 let provider_to_string = function
   | Github -> "github"
-  | Kubernetes -> "kubernetes"
-  | Ssh -> "ssh"
-  | Datadog -> "datadog"
-  | Circleci -> "circleci"
 
 type generation = {
   number : int;
@@ -13,24 +9,6 @@ type generation = {
   expires_at : float;
   installed_at : float;
 }
-
-type health =
-  | Healthy
-  | Expiring_soon of { seconds_remaining : float }
-  | Expired of { seconds_ago : float }
-
-(* The margin exists because host and provider clocks do not agree exactly.
-   Rotating early is safe; using a credential past its real expiry is not. *)
-let health_of ~now ~margin_seconds generation =
-  let remaining = generation.expires_at -. now in
-  if remaining <= 0.0 then Expired { seconds_ago = -.remaining }
-  else if remaining <= margin_seconds then Expiring_soon { seconds_remaining = remaining }
-  else Healthy
-
-let needs_rotation ~now ~margin_seconds generation =
-  match health_of ~now ~margin_seconds generation with
-  | Healthy -> false
-  | Expiring_soon _ | Expired _ -> true
 
 type validation_error =
   | Empty_value
