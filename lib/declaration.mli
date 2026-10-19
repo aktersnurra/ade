@@ -52,7 +52,6 @@ val image_digest : t -> string
 (** The pinned digest, whichever form the image takes. Drift comparison and the
     declaration digest use this, so moving an image between a registry and a
     local artifact is not a change of identity. *)
-val smolfile : t -> string
 val resources : t -> resources
 val network : t -> network
 val ssh : t -> ssh

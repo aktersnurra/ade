@@ -11,7 +11,6 @@ let valid_toml =
   {|
 name = "work"
 image = "docker.io/library/ade-workstation@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-smolfile = "smolfiles/workstation.Smolfile"
 
 [resources]
 cpus = 4

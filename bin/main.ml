@@ -10,18 +10,20 @@ let exit_of_error error =
   prerr_endline ("ade: " ^ Ade_error.to_string error);
   1
 
-(* The runtime binary is resolved from the managed runtime root, with an
-   override for tests and qualification so no test ever depends on a runtime
-   installed for real use. *)
+(* Process_runner needs an absolute path, so a bare "smolvm" is searched for on
+   PATH here. ADE_SMOLVM_BIN overrides for tests. When nothing is found the
+   bare name is kept, so the error names what the user has to install. *)
 let smolvm_executable () =
   match Sys.getenv_opt "ADE_SMOLVM_BIN" with
   | Some path -> path
-  | None -> (
-      match Sys.getenv_opt "HOME" with
-      | Some home ->
-          List.fold_left Filename.concat home
-            [ ".local"; "share"; "ade"; "runtime"; "smolvm-1.13.1"; "bin"; "smolvm" ]
-      | None -> "smolvm")
+  | None ->
+      let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+      let candidates =
+        List.filter_map
+          (fun dir -> if dir = "" then None else Some (Filename.concat dir "smolvm"))
+          (String.split_on_char ':' path)
+      in
+      Option.value (List.find_opt Sys.file_exists candidates) ~default:"smolvm"
 
 let declarations_dir () =
   match Sys.getenv_opt "ADE_WORKBENCHES_DIR" with

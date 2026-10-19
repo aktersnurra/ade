@@ -2,10 +2,7 @@
 .pi-subagents/
 .rpiv/
 artifacts/
-.hegel/
 _build/
-result
 __pycache__/
 *.pyc
-.gcroots/
 .claude/writes.log
