@@ -114,6 +114,18 @@ let environment_is_not_inherited () =
       in
       Alcotest.(check bool) "host variable not inherited" false (contains "leaked-value")
 
+(* Writing a payload to a child that has already exited raises SIGPIPE, which
+   kills the whole process unless it is ignored. The child here never reads. *)
+let a_child_that_ignores_stdin_does_not_kill_the_host () =
+  let request =
+    { Process_runner.executable = "/usr/bin/true"; argv = []; env = [];
+      stdin = Some (String.make 4_000_000 'x'); stdio = Process_runner.Capture }
+  in
+  match Process_runner.run request with
+  | Ok { status = 0; _ } -> ()
+  | Ok { status; _ } -> Alcotest.failf "status %d" status
+  | Error e -> Alcotest.failf "run: %s" (Ade_error.to_string e)
+
 let () =
   Alcotest.run "process_runner"
     [ ( "argv",
@@ -122,7 +134,9 @@ let () =
       ( "streams",
         [ Alcotest.test_case "stdin" `Quick stdin_payload_reaches_the_child;
           Alcotest.test_case "status" `Quick nonzero_status_is_reported;
-          Alcotest.test_case "environment" `Quick environment_is_not_inherited ] );
+          Alcotest.test_case "environment" `Quick environment_is_not_inherited;
+          Alcotest.test_case "sigpipe" `Quick
+            a_child_that_ignores_stdin_does_not_kill_the_host ] );
       ( "errors",
         [ Alcotest.test_case "missing executable" `Quick missing_executable_is_unavailable ] )
     ]

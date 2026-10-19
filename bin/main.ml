@@ -104,13 +104,18 @@ let exec_command =
   let command_argument =
     Arg.(non_empty & pos_right 0 string [] & info [] ~docv:"COMMAND")
   in
+  (* The guest command's status is the command's status, so scripts and
+     agents can tell whether what they ran worked. *)
   let run name command =
-    with_declaration name (fun lifecycle declaration ->
-        Result.map
-          (fun output ->
+    match load_declaration name with
+    | Error error -> exit_of_error error
+    | Ok declaration -> (
+        match Lifecycle.exec (lifecycle ()) declaration command with
+        | Error error -> exit_of_error error
+        | Ok output ->
             print_string output.Process_runner.stdout;
-            prerr_string output.Process_runner.stderr)
-          (Lifecycle.exec lifecycle declaration command))
+            prerr_string output.Process_runner.stderr;
+            output.Process_runner.status)
   in
   Cmd.v
     (Cmd.info "exec" ~doc:"Run one command inside the workbench")

@@ -98,6 +98,9 @@ def main():
             command = argv[argv.index("--") + 1 :]
             if command:
                 print(" ".join(command))
+            # `exit N` stands in for a guest command that fails with status N.
+            if len(command) == 2 and command[0] == "exit":
+                return int(command[1])
         return 0
 
     print(f"unsupported machine subcommand: {verb}", file=sys.stderr)

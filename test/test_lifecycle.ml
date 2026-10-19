@@ -286,6 +286,57 @@ let the_lock_excludes_a_second_operation () =
       | Ok lock -> Workbench_lock.release lock
       | Error error -> Alcotest.failf "reacquire: %s" (Ade_error.to_string error))
 
+let lock_name () =
+  match Workbench_name.of_string "work" with
+  | Ok name -> name
+  | Error _ -> Alcotest.fail "name"
+
+(* A crash leaves the lock file behind. The lock is a kernel record lock, held
+   by a process rather than by the file existing, so a leftover file must not
+   block the workbench forever. *)
+let a_leftover_lock_file_does_not_block () =
+  let paths = State_paths.make ~root:(temp_root ()) () in
+  let name = lock_name () in
+  let file = State_paths.lock_file paths name in
+  (match State_paths.ensure_dir (Filename.dirname file) with
+   | Ok () -> ()
+   | Error error -> Alcotest.failf "ensure_dir: %s" (Ade_error.to_string error));
+  Out_channel.with_open_bin file (fun channel -> Out_channel.output_string channel "99999\n");
+  match Workbench_lock.acquire paths name with
+  | Ok lock -> Workbench_lock.release lock
+  | Error error -> Alcotest.failf "acquire: %s" (Ade_error.to_string error)
+
+(* The same refusal must hold across processes, which the in-process table
+   cannot see, and must be a policy refusal rather than bad runtime output. *)
+let another_process_holding_the_lock_refuses () =
+  let paths = State_paths.make ~root:(temp_root ()) () in
+  let name = lock_name () in
+  let ready_read, ready_write = Unix.pipe () in
+  let release_read, release_write = Unix.pipe () in
+  match Unix.fork () with
+  | 0 ->
+      (* The child's copy of the write end must close, or it never sees EOF. *)
+      Unix.close release_write;
+      (match Workbench_lock.acquire paths name with
+       | Ok _ -> ignore (Unix.write_substring ready_write "1" 0 1)
+       | Error _ -> ignore (Unix.write_substring ready_write "0" 0 1));
+      ignore (Unix.read release_read (Bytes.create 1) 0 1);
+      Unix._exit 0
+  | child ->
+      let flag = Bytes.create 1 in
+      ignore (Unix.read ready_read flag 0 1);
+      if Bytes.to_string flag <> "1" then Alcotest.fail "the child could not take the lock";
+      (match Workbench_lock.acquire paths name with
+       | Ok _ -> Alcotest.fail "expected the other process's lock to be respected"
+       | Error (Ade_error.Operation_refused _) -> ()
+       | Error error -> Alcotest.failf "wrong error: %s" (Ade_error.to_string error));
+      Unix.close release_write;
+      ignore (Unix.waitpid [] child);
+      (match Workbench_lock.acquire paths name with
+       | Ok lock -> Workbench_lock.release lock
+       | Error error ->
+           Alcotest.failf "lock not released with its owner: %s" (Ade_error.to_string error))
+
 let () =
   Alcotest.run "lifecycle"
     [ ( "create",
@@ -312,5 +363,7 @@ let () =
       ( "convergence",
         [ Alcotest.test_case "idempotent" `Quick commands_are_idempotent;
           Alcotest.test_case "status" `Quick status_reports_observed_state;
-          Alcotest.test_case "lock" `Quick the_lock_excludes_a_second_operation ] )
+          Alcotest.test_case "lock" `Quick the_lock_excludes_a_second_operation;
+          Alcotest.test_case "leftover lock file" `Quick a_leftover_lock_file_does_not_block;
+          Alcotest.test_case "other process" `Quick another_process_holding_the_lock_refuses ] )
     ]

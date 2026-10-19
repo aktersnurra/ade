@@ -23,6 +23,15 @@ let install_argv ~provider ~generation =
       (Filename.quote file);
   ]
 
+(* The guest's exit status is the only evidence a write or activation worked,
+   so a nonzero one is a failure carrying the guest's own message. *)
+let checked result =
+  match result with
+  | Error _ as error -> error
+  | Ok { Process_runner.status = 0; _ } -> Ok ()
+  | Ok { Process_runner.status; stderr; _ } ->
+      Error (Ade_error.Runtime_failed { argv = [ "credential install" ]; status; stderr })
+
 let install ~smolvm ~name ~provider ~value ~expires_at ~now ~previous =
   (* Validate before touching the guest: a credential that is empty, already
      expired or long-lived is not what was asked for, and installing it would
@@ -37,14 +46,16 @@ let install ~smolvm ~name ~provider ~value ~expires_at ~now ~previous =
            })
   | Ok () ->
       let number = Credential.next_number previous in
-      let* _ =
-        Smolvm.exec_with_stdin smolvm name (install_argv ~provider ~generation:number)
-          ~stdin:value
+      let* () =
+        checked
+          (Smolvm.exec_with_stdin smolvm name (install_argv ~provider ~generation:number)
+             ~stdin:value)
       in
       (* Activation is a single atomic rename over the symlink, so a reader
          never observes a half-installed generation. *)
-      let* _ =
-        Smolvm.exec smolvm name
+      let* () =
+        checked
+        @@ Smolvm.exec smolvm name
           [
             "sh"; "-c";
             Printf.sprintf
@@ -63,8 +74,9 @@ let install ~smolvm ~name ~provider ~value ~expires_at ~now ~previous =
         }
 
 let revoke ~smolvm ~name ~provider =
-  let* _ =
-    Smolvm.exec smolvm name
+  let* () =
+    checked
+    @@ Smolvm.exec smolvm name
       [
         "sh"; "-c";
         Printf.sprintf "rm -f %s"

@@ -23,6 +23,32 @@ let contains haystack needle =
   let rec scan i = i + nl <= hl && (String.sub haystack i nl = needle || scan (i + 1)) in
   nl = 0 || scan 0
 
+(* A guest command that exits nonzero is a failed install, not a success with
+   an empty result: reporting an activated generation that was never written
+   would leave the agents without the credential they were promised. *)
+let failing_runner _ =
+  Ok { Process_runner.status = 1; stdout = ""; stderr = "No space left on device" }
+
+let a_failed_guest_command_fails_the_install () =
+  let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:failing_runner in
+  match
+    Credential_installer.install ~smolvm ~name:(name_exn "work")
+      ~provider:Credential.Github ~value:secret ~expires_at:(now +. 3600.0) ~now
+      ~previous:None
+  with
+  | Ok _ -> Alcotest.fail "expected the failed write to be an error"
+  | Error (Ade_error.Runtime_failed { stderr; _ }) ->
+      Alcotest.(check bool) "carries the guest error" true (contains stderr "No space")
+  | Error e -> Alcotest.failf "unexpected error: %s" (Ade_error.to_string e)
+
+let a_failed_revoke_fails () =
+  let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:failing_runner in
+  match
+    Credential_installer.revoke ~smolvm ~name:(name_exn "work") ~provider:Credential.Github
+  with
+  | Ok () -> Alcotest.fail "expected the failed revoke to be an error"
+  | Error _ -> ()
+
 let install fake_smolvm ?(value = secret) ?(expires_at = now +. 3600.0) ?previous () =
   Credential_installer.install ~smolvm:fake_smolvm ~name:(name_exn "work")
     ~provider:Credential.Github ~value ~expires_at ~now ~previous
@@ -139,5 +165,8 @@ let () =
           Alcotest.test_case "refuses invalid" `Quick
             invalid_credentials_are_refused_before_the_guest_is_touched;
           Alcotest.test_case "numbering" `Quick generation_numbers_increase;
-          Alcotest.test_case "atomic" `Quick activation_is_atomic ] )
+          Alcotest.test_case "atomic" `Quick activation_is_atomic;
+          Alcotest.test_case "failed install" `Quick
+            a_failed_guest_command_fails_the_install;
+          Alcotest.test_case "failed revoke" `Quick a_failed_revoke_fails ] )
     ]
