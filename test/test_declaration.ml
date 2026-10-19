@@ -157,6 +157,46 @@ let mounts_change_the_digest () =
   Alcotest.(check bool) "unmounted differs" false (digest valid_toml = digest ro);
   Alcotest.(check bool) "mode differs" false (digest ro = digest rw)
 
+let load_ok contents =
+  match Declaration.load (write_temp contents) with
+  | Ok declaration -> declaration
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+
+(* A clone mount is the safe way to hand over a repository: the guest gets it
+   read-only and works in its own copy. Its guest path defaults from the
+   repository's name, so the common case needs only the host path. *)
+let clone_mount_defaults_its_guest_path () =
+  let declaration =
+    load_ok (with_mounts "[[mount]]\nhost = \"~/code/project-a/\"\nmode = \"clone\"\n")
+  in
+  match Declaration.mounts declaration with
+  | [ mount ] ->
+      Alcotest.(check bool) "clone" true (mount.Declaration.mode = Declaration.Clone);
+      Alcotest.(check string) "guest" "/src/project-a" mount.Declaration.guest;
+      Alcotest.(check string) "name" "project-a" (Declaration.clone_name mount)
+  | mounts -> Alcotest.failf "expected one mount, got %d" (List.length mounts)
+
+let clone_mount_may_name_its_guest_path () =
+  let declaration =
+    load_ok
+      (with_mounts
+         "[[mount]]\nhost = \"/code/a\"\nguest = \"/ref/a\"\nmode = \"clone\"\n")
+  in
+  match Declaration.mounts declaration with
+  | [ mount ] -> Alcotest.(check string) "guest" "/ref/a" mount.Declaration.guest
+  | _ -> Alcotest.fail "expected one mount"
+
+(* The name becomes a file name in /outbox and a path in /workspace, so it is
+   held to a conservative alphabet. *)
+let clone_mount_names_are_conservative = fun host () ->
+  rejects "clone"
+    (with_mounts (Printf.sprintf "[[mount]]\nhost = %S\nmode = \"clone\"\n" host))
+    ()
+
+let only_clone_mounts_may_omit_the_guest_path () =
+  rejects "guest"
+    (with_mounts "[[mount]]\nhost = \"/code/a\"\nmode = \"ro\"\n") ()
+
 let rejects_mount fragment ?mode ~guest () =
   rejects fragment (with_mounts (mount_table ?mode ~host:"/data" ~guest ())) ()
 
@@ -185,11 +225,6 @@ directory = "/tmp/b"
 keep = 1
 |}
     network
-
-let load_ok contents =
-  match Declaration.load (write_temp contents) with
-  | Ok declaration -> declaration
-  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
 
 (* A registry tag is accepted without a digest: the guest runs pacman -Syu, so
    pinning the base image would not pin what the agents actually run. *)
@@ -257,6 +292,14 @@ let () =
           Alcotest.test_case "provision path" `Quick provision_is_relative_to_the_declaration;
           Alcotest.test_case "no provision" `Quick provision_is_optional;
           Alcotest.test_case "provision moves the digest" `Quick provision_changes_the_digest ] );
+      ( "clone mounts",
+        [ Alcotest.test_case "default guest" `Quick clone_mount_defaults_its_guest_path;
+          Alcotest.test_case "named guest" `Quick clone_mount_may_name_its_guest_path;
+          Alcotest.test_case "space in name" `Quick (clone_mount_names_are_conservative "/code/my repo");
+          Alcotest.test_case "dotdot" `Quick (clone_mount_names_are_conservative "/code/..");
+          Alcotest.test_case "outbox reserved" `Quick (rejects_mount "reserved" ~guest:"/outbox");
+          Alcotest.test_case "guest required otherwise" `Quick
+            only_clone_mounts_may_omit_the_guest_path ] );
       ( "mounts",
         [ Alcotest.test_case "parse" `Quick mounts_parse_in_order_and_default_read_only;
           Alcotest.test_case "none by default" `Quick no_mounts_by_default;
@@ -276,7 +319,7 @@ let () =
           Alcotest.test_case "above maintenance" `Quick
             (rejects_mount "reserved" ~guest:"/mnt");
           Alcotest.test_case "unknown mode" `Quick
-            (rejects_mount "mount mode" ~mode:"clone" ~guest:"/src/a");
+            (rejects_mount "mount mode" ~mode:"copy" ~guest:"/src/a");
           Alcotest.test_case "unknown key" `Quick
             (rejects "unknown key"
                (with_mounts "[[mount]]\nhost = \"/data\"\nguest = \"/d\"\nfollow = true\n"));

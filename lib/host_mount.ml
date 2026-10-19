@@ -108,7 +108,15 @@ let resolve policy (mount : Declaration.mount) =
           (Printf.sprintf "host path %s overlaps protected %s" quoted (Filename.quote protected))
     | None -> Ok ()
   in
-  let read_only = mount.Declaration.mode = Declaration.Read_only in
+  let read_only = mount.Declaration.mode <> Declaration.Read_write in
+  let* () =
+    (* Cloning needs history to bundle back, so anything that is not a git
+       repository is refused here rather than at the first pull. *)
+    if mount.Declaration.mode = Declaration.Clone
+       && not (Sys.file_exists (Filename.concat source ".git"))
+    then refused (Printf.sprintf "clone mount %s is not a git repository" quoted)
+    else Ok ()
+  in
   let* () =
     if read_only then Ok ()
     else
@@ -132,6 +140,13 @@ let resolve_all policy mounts =
     (Ok []) mounts
   |> Result.map List.rev
 
+(* The guest returns bundles through one writable directory that belongs to
+   ADE, not to the user, so it needs none of the user-path policing. *)
+let outbox ~paths declaration =
+  let source = State_paths.outbox_dir paths (Declaration.name declaration) in
+  let* () = State_paths.ensure_dir source in
+  Ok { source; guest = "/outbox"; read_only = false }
+
 let for_declaration ~paths declaration =
   match Declaration.mounts declaration with
   | [] -> Ok []
@@ -142,9 +157,15 @@ let for_declaration ~paths declaration =
           let declarations_dir =
             Filename.dirname (canonical (Declaration.path declaration))
           in
-          resolve_all
-            (default_policy ~home ~state_root:(State_paths.root paths) ~declarations_dir)
-            mounts)
+          let* resolved =
+            resolve_all
+              (default_policy ~home ~state_root:(State_paths.root paths) ~declarations_dir)
+              mounts
+          in
+          if List.exists (fun m -> m.Declaration.mode = Declaration.Clone) mounts then
+            let* outbox = outbox ~paths declaration in
+            Ok (resolved @ [ outbox ])
+          else Ok resolved)
 
 let volume_spec resolved =
   resolved.source ^ ":" ^ resolved.guest ^ if resolved.read_only then ":ro" else ""

@@ -13,6 +13,10 @@ val make : ?root:string -> unit -> t
 
 val root : t -> string
 val lock_file : t -> Workbench_name.t -> string
+val outbox_dir : t -> Workbench_name.t -> string
+(** Where a clone workbench's guest drops git bundles. Everything in it is
+    written by the guest and so untrusted until validated. *)
+
 val ssh_agent_file : t -> Workbench_name.t -> string
 (** Where the running workbench's host agent is recorded, so a later [stop] can
     find and stop it. *)

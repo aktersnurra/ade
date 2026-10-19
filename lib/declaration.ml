@@ -20,7 +20,7 @@ type resources = {
 
 type backup = { directory : string; keep : int }
 
-type mount_mode = Read_only | Read_write
+type mount_mode = Read_only | Read_write | Clone
 type mount = { host : string; guest : string; mode : mount_mode }
 
 type t = {
@@ -261,7 +261,7 @@ let parse_backup table =
    carry host files), or the maintenance mount points. *)
 let reserved_guest_paths =
   [ "/bin"; "/boot"; "/dev"; "/etc"; "/lib"; "/lib64"; "/nix"; "/proc"; "/run";
-    "/sbin"; "/sys"; "/tmp"; "/usr"; "/var"; "/workspace"; "/mnt/ade-export";
+    "/sbin"; "/sys"; "/tmp"; "/usr"; "/var"; "/workspace"; "/outbox"; "/mnt/ade-export";
     "/mnt/ade-import" ]
 
 let is_within ~ancestor path =
@@ -294,11 +294,34 @@ let validate_guest_path guest =
       fail (Printf.sprintf "mount guest path %s overlaps reserved %s" quoted reserved)
   | None -> guest
 
+(* The repository's name is the last component of its host path. It becomes a
+   file name in /outbox and a directory under /workspace, so it is held to a
+   conservative alphabet rather than whatever the host path allowed. *)
+let clone_name mount =
+  let rec strip path =
+    if String.length path > 1 && path.[String.length path - 1] = '/' then
+      strip (String.sub path 0 (String.length path - 1))
+    else path
+  in
+  Filename.basename (strip mount.host)
+
+let validate_clone_name name =
+  let ok_char = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '.' | '_' | '-' -> true
+    | _ -> false
+  in
+  if name = "" || name = "." || name = ".." || name.[0] = '-'
+     || not (String.for_all ok_char name)
+  then
+    fail
+      (Printf.sprintf
+         "clone mount %s: the repository name must be letters, digits, '.', '_' and '-'"
+         (Filename.quote name))
+
 let parse_mount table =
   reject_unknown ~context:"[[mount]]" table [ "host"; "guest"; "mode" ];
   let host = as_string "mount.host" (require table "host" "[[mount]]") in
   if host = "" then fail "mount.host must not be empty";
-  let guest = validate_guest_path (as_string "mount.guest" (require table "guest" "[[mount]]")) in
   (* Read-only unless written out: write access is the grant that matters. *)
   let mode =
     match find table "mode" with
@@ -307,10 +330,24 @@ let parse_mount table =
         match as_string "mount.mode" value with
         | "ro" -> Read_only
         | "rw" -> Read_write
+        | "clone" -> Clone
         | other ->
             fail
-              (Printf.sprintf "unknown mount mode %s (expected ro or rw)" (Filename.quote other)))
+              (Printf.sprintf "unknown mount mode %s (expected ro, rw or clone)"
+                 (Filename.quote other)))
   in
+  (* Only a clone mount can leave the guest path out: it has a natural one. *)
+  let guest =
+    match (find table "guest", mode) with
+    | Some value, _ -> as_string "mount.guest" value
+    | None, Clone ->
+        let name = clone_name { host; guest = ""; mode } in
+        validate_clone_name name;
+        "/src/" ^ name
+    | None, _ -> as_string "mount.guest" (require table "guest" "[[mount]]")
+  in
+  if mode = Clone then validate_clone_name (clone_name { host; guest; mode });
+  let guest = validate_guest_path guest in
   { host; guest; mode }
 
 (* Nested guest mounts are refused until their semantics are qualified on the
@@ -437,7 +474,7 @@ let canonical d =
     (fun mount ->
       line "mount"
         (Printf.sprintf "%s:%s:%s" mount.host mount.guest
-           (match mount.mode with Read_only -> "ro" | Read_write -> "rw")))
+           (match mount.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone")))
     (List.sort (fun a b -> String.compare a.guest b.guest) d.mounts);
   Buffer.contents buffer
 
