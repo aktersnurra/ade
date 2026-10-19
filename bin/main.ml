@@ -10,20 +10,12 @@ let exit_of_error error =
   prerr_endline ("ade: " ^ Ade_error.to_string error);
   1
 
-(* Process_runner needs an absolute path, so a bare "smolvm" is searched for on
-   PATH here. ADE_SMOLVM_BIN overrides for tests. When nothing is found the
-   bare name is kept, so the error names what the user has to install. *)
+(* ADE_SMOLVM_BIN overrides for tests. Otherwise smolvm is found on PATH; when
+   it is not, the bare name is kept so the error names what to install. *)
 let smolvm_executable () =
   match Sys.getenv_opt "ADE_SMOLVM_BIN" with
   | Some path -> path
-  | None ->
-      let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
-      let candidates =
-        List.filter_map
-          (fun dir -> if dir = "" then None else Some (Filename.concat dir "smolvm"))
-          (String.split_on_char ':' path)
-      in
-      Option.value (List.find_opt Sys.file_exists candidates) ~default:"smolvm"
+  | None -> Option.value (Process_runner.find_executable "smolvm") ~default:"smolvm"
 
 let declarations_dir () =
   match Sys.getenv_opt "ADE_WORKBENCHES_DIR" with
@@ -125,6 +117,24 @@ let provision_command =
   simple_command "provision" "Re-run the declared provisioning script (workbench must be stopped)"
     Lifecycle.provision
 
+let pull_command =
+  let open Cmdliner in
+  let repo =
+    Arg.(value & pos 1 (some string) None & info [] ~docv:"REPO"
+           ~doc:"Only this clone mount; default is every one.")
+  in
+  let run name repo =
+    with_declaration name (fun lifecycle declaration ->
+        Result.map
+          (List.iter (fun repo ->
+               Printf.printf "pull: %s -> refs/remotes/agents/*\n" repo))
+          (Lifecycle.pull lifecycle declaration ~repo))
+  in
+  Cmd.v
+    (Cmd.info "pull"
+       ~doc:"Bring the agents' branches back from clone mounts as agents/*")
+    Term.(const run $ name_argument $ repo)
+
 let rm_command =
   let open Cmdliner in
   let yes =
@@ -153,6 +163,7 @@ let commands =
     exec_command;
     status_command;
     provision_command;
+    pull_command;
     rm_command;
   ]
 

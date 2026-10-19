@@ -157,6 +157,14 @@ let provision t declaration =
               let* () = run_provision t declaration script in
               Ok Changed))
 
+let pull t declaration ~repo =
+  let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
+  match Process_runner.find_executable "git" with
+  | None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
+  | Some git ->
+      Pull.run ~smolvm:t.smolvm ~runner:Process_runner.run ~git ~paths:t.paths declaration
+        ~repo
+
 let remove t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in

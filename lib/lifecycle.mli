@@ -26,6 +26,10 @@ val provision : t -> Declaration.t -> (outcome, Ade_error.t) result
     runs, because stopping it would cut off whatever the agents are doing.
     [create] and [start] run it once, right after creating the machine. *)
 
+val pull : t -> Declaration.t -> repo:string option -> (string list, Ade_error.t) result
+(** Start the machine if needed, then bring the agent's branches back from the
+    clone mounts as [refs/remotes/agents/*]. See {!Pull}. *)
+
 val remove : t -> Declaration.t -> (outcome, Ade_error.t) result
 (** Stop the machine if it runs, delete it, release its host agent and forget
     ADE's state for it. The workspace goes with the machine, so the CLI asks

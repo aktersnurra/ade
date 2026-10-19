@@ -72,6 +72,15 @@ let status_code = function
   | Unix.WEXITED code -> code
   | Unix.WSIGNALED signal | Unix.WSTOPPED signal -> 128 + signal
 
+let find_executable name =
+  let path = Option.value (Sys.getenv_opt "PATH") ~default:"" in
+  String.split_on_char ':' path
+  |> List.filter_map (fun dir ->
+         if dir = "" then None else Some (Filename.concat dir name))
+  |> List.find_opt (fun candidate ->
+         try Unix.access candidate [ Unix.X_OK ]; not (Sys.is_directory candidate)
+         with Unix.Unix_error _ -> false)
+
 let run request =
   (* A child that exits without reading its stdin would otherwise deliver
      SIGPIPE to ADE on the next write and kill it; the write's EPIPE is

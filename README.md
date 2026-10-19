@@ -43,6 +43,7 @@ ade attach work          # start if needed, then attach (Herdr, if enabled)
 ade exec work -- CMD
 ade status work
 ade stop work
+ade pull work [REPO]     # bring the agents' branches back from clone mounts
 ade provision work       # re-run the provision script (machine must be stopped)
 ade rm work --yes        # delete the machine, its guest disk and ADE's state
 ```
@@ -102,6 +103,33 @@ the jj operation log all act on the host the next time you run git or jj
 there. Guest paths may not overlap each other or `/workspace`, `/run` and
 the other system paths.
 
+### Clone mode for repositories
+
+A writable mount of a repository is a way out of the VM: git hooks, `.git/config`
+(`core.fsmonitor`, filters, aliases) and jj's operation log all run on the host
+the next time you use that tree. So repositories use `mode = "clone"`:
+
+```toml
+[[mount]]
+host = "~/code/project-a"
+mode = "clone"                  # guest defaults to /src/project-a, read-only
+```
+
+The agent clones into its own disk (`git clone /src/project-a /workspace/project-a`)
+and commits, branches and rebases freely. `ade pull work` then has the guest
+write `git bundle create /outbox/project-a.bundle --branches`, checks on the host
+that the file is a regular file and a valid bundle, and fetches it into your
+repository as `refs/remotes/agents/*` with object checking on. Your branches,
+working tree and config are never touched; review and merge agent branches like a
+colleague's. In a colocated jj repository, jj imports the refs on its next
+command. Only the bundle crosses: fetching straight from the guest's clone would
+run `upload-pack` inside a repository the guest controls.
+
+A clone mount must be a git repository, and the repository's name (the last part
+of the host path) may use only letters, digits, `.`, `_` and `-`. `/outbox` is
+backed by ADE's own state directory for the workbench and is reserved. `git`
+must be on the host's `PATH`.
+
 Mounts and `--ssh-agent` are applied when the machine is created. Adding either
 to an existing workbench takes effect after `ade rm` and `ade create`.
 
@@ -153,5 +181,6 @@ tests use a fake runtime. Known gaps:
   and `repositories`; confirm on the first real run.
 - `services.docker` is parsed but Docker is never started in the guest.
 - The `[backup]` table is still required but unused since backup was removed.
+- `ade pull` is tested against real git with a simulated guest, not a real VM.
 - `provision/arch.sh` and the allowlist hosts for the Herdr and Claude Code
   installers are untested against the real services.

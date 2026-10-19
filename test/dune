@@ -71,3 +71,8 @@
  (name test_boot)
  (modules test_boot)
  (libraries ade alcotest))
+
+(test
+ (name test_pull)
+ (modules test_pull)
+ (libraries ade alcotest unix))
