@@ -82,9 +82,9 @@ let a_successful_exchange_yields_a_token_and_expiry () =
   match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
   | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
   | Ok minted ->
-      Alcotest.(check string) "token" fake_token minted.Provider.value;
+      Alcotest.(check string) "token" fake_token minted.Github_credential.value;
       Alcotest.(check bool) "expiry parsed as a real time" true
-        (minted.Provider.expires_at > 1_756_000_000.0)
+        (minted.Github_credential.expires_at > 1_756_000_000.0)
 
 (* A refusal must be reported as such, not silently treated as a token. *)
 let a_refused_exchange_is_reported () =
@@ -111,7 +111,7 @@ let an_unreadable_expiry_falls_back_to_one_hour () =
   in
   match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
   | Ok minted ->
-      Alcotest.(check (float 1.0)) "one hour" (now +. 3600.0) minted.Provider.expires_at
+      Alcotest.(check (float 1.0)) "one hour" (now +. 3600.0) minted.Github_credential.expires_at
   | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
 
 
@@ -233,7 +233,7 @@ let expiries_are_parsed_as_utc () =
       match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"j" ~now with
       | Error e -> Alcotest.failf "%s: %s" timestamp (Github_credential.describe_error e)
       | Ok minted ->
-          Alcotest.(check (float 0.5)) timestamp expected minted.Provider.expires_at)
+          Alcotest.(check (float 0.5)) timestamp expected minted.Github_credential.expires_at)
     [
       ("1970-01-01T00:00:00Z", 0.0);
       ("2000-01-01T00:00:00Z", 946684800.0);

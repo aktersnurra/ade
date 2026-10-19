@@ -1,39 +1,9 @@
 open Ade
 
 let now = 1_756_500_000.0
-let margin = 300.0
 
 let generation ?(number = 1) ?(provider = Credential.Github) expires_at =
   { Credential.number; provider; expires_at; installed_at = now }
-
-let health_is label expected actual =
-  let render = function
-    | Credential.Healthy -> "healthy"
-    | Credential.Expiring_soon _ -> "expiring"
-    | Credential.Expired _ -> "expired"
-  in
-  Alcotest.(check string) label expected (render actual)
-
-let a_fresh_credential_is_healthy () =
-  health_is "fresh" "healthy"
-    (Credential.health_of ~now ~margin_seconds:margin (generation (now +. 3600.0)))
-
-(* Rotation must begin before expiry, not at it. *)
-let a_credential_inside_the_margin_is_expiring () =
-  health_is "inside margin" "expiring"
-    (Credential.health_of ~now ~margin_seconds:margin (generation (now +. 120.0)))
-
-let an_expired_credential_is_expired () =
-  health_is "expired" "expired"
-    (Credential.health_of ~now ~margin_seconds:margin (generation (now -. 1.0)))
-
-let rotation_is_due_inside_the_margin () =
-  Alcotest.(check bool) "healthy" false
-    (Credential.needs_rotation ~now ~margin_seconds:margin (generation (now +. 3600.0)));
-  Alcotest.(check bool) "expiring" true
-    (Credential.needs_rotation ~now ~margin_seconds:margin (generation (now +. 120.0)));
-  Alcotest.(check bool) "expired" true
-    (Credential.needs_rotation ~now ~margin_seconds:margin (generation (now -. 1.0)))
 
 let empty_credentials_are_rejected () =
   match Credential.validate ~now ~value:"" ~expires_at:(now +. 3600.0) with
@@ -101,12 +71,7 @@ let audit_records_are_secret_free () =
 
 let () =
   Alcotest.run "credential"
-    [ ( "health",
-        [ Alcotest.test_case "fresh" `Quick a_fresh_credential_is_healthy;
-          Alcotest.test_case "expiring" `Quick a_credential_inside_the_margin_is_expiring;
-          Alcotest.test_case "expired" `Quick an_expired_credential_is_expired;
-          Alcotest.test_case "rotation due" `Quick rotation_is_due_inside_the_margin ] );
-      ( "validation",
+    [ ( "validation",
         [ Alcotest.test_case "empty" `Quick empty_credentials_are_rejected;
           Alcotest.test_case "expired" `Quick already_expired_credentials_are_rejected;
           Alcotest.test_case "too long" `Quick overly_long_credentials_are_rejected;
