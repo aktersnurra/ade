@@ -2,61 +2,81 @@
 
 Run coding agents inside named local Linux workbench VMs.
 
-Each workbench is a durable boundary for one identity and data domain — `work`,
-`personal`, `offline`, `quarantine`. ADE is policy and transaction glue around a
-pinned [SmolVM](https://github.com/smol-machines/smolvm) runtime, which stays
-authoritative for machine existence and state.
+A workbench is one [SmolVM](https://github.com/smol-machines/smolvm) machine that
+the agents of one identity share. It sees only the host directories you mount
+into it and has none of your privileges. SmolVM stays authoritative for machine
+existence and state; ADE is the policy around it.
 
 ## What is here
 
 - `bin/`, `lib/` — the `ade` CLI, one small OCaml binary
 - `workbenches/` — host-owned declarations, one per workbench
-- `nix/` — the pinned runtime, guest agent rootfs and library set
-- `images/nix-workstation/` — the workbench OCI image
-- `smolfiles/` — the machine definition
-- `scripts/install-smolvm.sh` — install the qualified runtime
-- `scripts/build-workstation-image.sh` — build the image inside a workbench
-- `docs/smolvm-workbenches.md` — operational guide
+- `provision/arch.sh` — installs the guest's tooling after creation
+- `docs/smolvm-workbenches.md` — the trust model and credential details
+- `docs/allowlist-workbench-sketch.md` — where this is going next
 
 ## Install
 
+SmolVM, the upstream way:
+
 ```sh
-./scripts/install-smolvm.sh
+brew install smol-machines/tap/smolvm                 # macOS
+curl -sSL https://smolmachines.com/install.sh | bash  # Linux
 ```
 
-Builds SmolVM 1.13.1 from the pinned source, verifies its version, digest and
-macOS hypervisor entitlement, then installs it under
-`~/.local/share/ade/runtime/`. It never touches Homebrew or the upstream SmolVM
-directories.
+On Linux the user needs access to `/dev/kvm`. ADE finds `smolvm` on `PATH`;
+`ADE_SMOLVM_BIN` overrides that.
 
-`mkfs.ext4` must be on `PATH`; the runtime shells out to it to format machine
-disks.
+ADE itself needs OCaml 5.4 or later:
+
+```sh
+opam install . --deps-only --with-test
+dune build
+```
 
 ## Use
 
 ```sh
-ade create work          # create from the declaration
+ade create work          # create from the declaration, then provision it
 ade start work           # ensure running
-ade attach work          # start if needed, then attach
+ade attach work          # start if needed, then attach (Herdr, if enabled)
 ade exec work -- CMD
 ade status work
 ade stop work
-```
-
-Maintenance:
-
-```sh
-ade backup work DEST
-ade restore work ARCHIVE --replace-workspace
-ade reimage work
-ade pack work OUTPUT
-ade destroy work --no-backup --confirm-destroy-workspace=work
-ade credentials status work
+ade provision work       # re-run the provision script (machine must be stopped)
+ade rm work --yes        # delete the machine, its guest disk and ADE's state
 ```
 
 Every command states an intended end state and is safe to repeat. Creating an
-existing machine converges rather than recreating it, which would destroy the
-workspace.
+existing machine converges rather than recreating it.
+
+## The guest
+
+Workbenches run `docker.io/menci/archlinuxarm:base-devel`. It is a third-party
+image, but the only one that is multi-arch (amd64 and arm64) and rebuilt daily
+from Arch Linux ARM: the official `archlinux` image is amd64 only, and Artix has
+no arm64 image. Because the guest runs `pacman -Syu`, pinning the image by digest
+would not pin what the agents run, so the digest is optional; if you write one
+(`name@sha256:...`) it is checked.
+
+```toml
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "../provision/arch.sh"   # relative to the declaration file
+```
+
+`provision` is optional. ADE runs the script once, right after creating the
+machine, as root with `bash -s`, checks its exit status, and stops the machine.
+The guest is booted without the SSH identity and without credentials for that
+window, since it is installing software from the network. A failed script leaves
+the machine created and stopped; fix it and run `ade provision NAME`. A `sealed`
+workbench cannot declare `provision`, because installing packages needs a network.
+
+`provision/arch.sh` installs git, jujutsu, base-devel, openssh, ripgrep, fd,
+nodejs, npm and python, then Herdr (`herdr.dev/install.sh`) and Claude Code (its
+native installer). Agents run as root in the guest and may `pacman -S` more, so
+the shipped allowlists include the Arch mirror hosts. SmolVM's allowlist is
+DNS-level and the Arch mirrors redirect between hosts, so expect to add one when
+a mirror changes.
 
 ## Mounts
 
@@ -82,8 +102,8 @@ the jj operation log all act on the host the next time you run git or jj
 there. Guest paths may not overlap each other or `/workspace`, `/run` and
 the other system paths.
 
-Mounts are applied when the machine is created. Adding one to an existing
-workbench takes effect after it is recreated.
+Mounts and `--ssh-agent` are applied when the machine is created. Adding either
+to an existing workbench takes effect after `ade rm` and `ade create`.
 
 ## What start does
 
@@ -93,57 +113,45 @@ start leaves nothing running:
 
 1. With `[ssh] mode = "dedicated_agent"`, start a host `ssh-agent` holding only
    the key named by `key_ref`. The VM gets this agent's socket, never yours,
-   and never the key.
+   and never the key. The key must have no passphrase.
 2. Boot the VM.
-3. With `[credentials.github]`, mint an installation token and install it into
-   guest tmpfs.
+3. With `[credentials.github]`, mint an installation token scoped to the
+   declared repositories and permissions, verify GitHub granted no more, and
+   install it into guest tmpfs.
 
-`ade stop` stops the VM, then its agent. `ade attach NAME` with no command opens
-Herdr when `services.herdr = true`. Agents are started from there.
+`ade stop` stops the VM, then its agent. Tokens are minted at start, so a
+restart refreshes them.
 
 Secret references (`key_ref`, `private_key_path`) take `keychain:ITEM` (macOS
 Keychain), `pass:ENTRY` (password-store, the whole entry) or `file:PATH`.
 
-A workbench created before `--ssh-agent` was passed at creation does not get
-the agent forwarded until it is recreated.
-
 ## Trust model
 
-A workbench VM is one security principal. Agents, tools and containers inside
-one workbench are mutually trusted at VM level: any process may read the
-workbench filesystem and use the capabilities that workbench holds. Use
-different workbenches when identities, data or authority must not mix.
+A workbench VM is one security principal. Agents and tools inside one workbench
+are mutually trusted at VM level: any process may read the workbench filesystem
+and use the capabilities that workbench holds. Use different workbenches when
+identities, data or authority must not mix.
 
-Guest root is untrusted. The host, ADE, the pinned runtime and the hypervisor
-are inside the trusted computing base.
-
-Credentials are written only to guest tmpfs under `/run/ade/secrets`, and a
-`Secret.t` can be neither printed nor written into a declaration. ADE cannot
-stop guest code copying a credential into persistent state, so workspace
-backups and machine packs are always treated as potentially secret-bearing.
+Guest root is untrusted. The host, ADE, SmolVM and the hypervisor are inside
+the trusted computing base. Credentials are written only to guest tmpfs under
+`/run/ade/secrets`, but ADE cannot stop guest code copying one into persistent
+state, so treat the guest disk as potentially secret-bearing.
 
 ## Testing
 
 ```sh
-nix develop -c dune runtest                # unit and adapter suites
-python3 -m unittest discover -s test -t .  # installer and runtime qualification
+dune runtest                               # unit suites
+python3 -m unittest discover -s test -t .  # CLI end-to-end against a fake SmolVM
 ```
-
-Property tests need a native arm64 opam switch; see `docs/hegel-testing.md`.
-
-Runtime qualification needs an installed runtime and a **short** `HOME`: the
-guest agent socket lives under it, and macOS caps `sun_path` at 104 bytes,
-which a `$TMPDIR` path exceeds.
 
 ## Status
 
-The command surface is complete. The runtime boots, runs containers, and
-enforces network postures — a positive hostname allowlist is verified to block
-hosts not on the list.
+Nothing has run against a real SmolVM, ssh-agent, `pass` or GitHub yet; the
+tests use a fake runtime. Known gaps:
 
-Parts of the design's qualification gate remain unverified: Docker and nested
-containers, Herdr startup, interactive attachment, and backups above 4 GiB. The
-libkrun/libkrunfw pair is consumed from upstream's release, pinned by hash but
-without signature or provenance attestation, because the guest kernel needs a
-compiler nixpkgs no longer carries. Both gaps are recorded in
-`docs/superpowers/specs/2026-08-30-smolvm-qualification-evidence.md`.
+- The GitHub token check assumes the response carries `repository_selection`
+  and `repositories`; confirm on the first real run.
+- `services.docker` is parsed but Docker is never started in the guest.
+- The `[backup]` table is still required but unused since backup was removed.
+- `provision/arch.sh` and the allowlist hosts for the Herdr and Claude Code
+  installers are untested against the real services.
