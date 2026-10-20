@@ -17,13 +17,8 @@ workspace_gib = 128
 posture = "public"
 
 [services]
-docker = true
 herdr = true
 
 [ssh]
 mode = "dedicated_agent"
 key_ref = "keychain:ade-personal-ssh"
-
-[backup]
-directory = "~/ade-backups/personal"
-keep = 3

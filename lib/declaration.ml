@@ -18,8 +18,6 @@ type resources = {
   workspace_gib : int;
 }
 
-type backup = { directory : string; keep : int }
-
 type mount_mode = Read_only | Read_write | Clone
 type mount = { host : string; guest : string; mode : mount_mode }
 
@@ -31,9 +29,7 @@ type t = {
   resources : resources;
   network : network;
   ssh : ssh;
-  docker_enabled : bool;
   herdr_enabled : bool;
-  backup : backup;
   mounts : mount list;
   github_credential : Otoml.t option;
 }
@@ -53,9 +49,7 @@ let provision d = d.provision
 let resources d = d.resources
 let network d = d.network
 let ssh d = d.ssh
-let docker_enabled d = d.docker_enabled
 let herdr_enabled d = d.herdr_enabled
-let backup d = d.backup
 let mounts d = d.mounts
 let github_credential d = d.github_credential
 
@@ -236,24 +230,10 @@ let parse_resources table =
   }
 
 let parse_services table =
-  reject_unknown ~context:"[services]" table [ "docker"; "herdr" ];
-  let read key =
-    match find table key with
-    | Some value -> as_bool ("services." ^ key) value
-    | None -> false
-  in
-  (read "docker", read "herdr")
-
-let parse_backup table =
-  reject_unknown ~context:"[backup]" table [ "directory"; "keep" ];
-  let directory = as_string "backup.directory" (require table "directory" "[backup]") in
-  if directory = "" then fail "backup.directory must not be empty";
-  let keep =
-    match find table "keep" with
-    | Some value -> positive "backup.keep" (as_int "backup.keep" value)
-    | None -> 5
-  in
-  { directory; keep }
+  reject_unknown ~context:"[services]" table [ "herdr" ];
+  match find table "herdr" with
+  | Some value -> as_bool "services.herdr" value
+  | None -> false
 
 (* Guest paths the runtime or ADE itself owns. A mount at, inside or above one
    of these would hide what ADE relies on: the system, credentials in
@@ -380,7 +360,7 @@ let sub_table root key context =
 let parse ~path root =
   reject_unknown ~context:"the declaration" root
     [ "name"; "image"; "provision"; "resources"; "network"; "services"; "ssh";
-      "backup"; "mount"; "credentials" ];
+      "mount"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
     match Workbench_name.of_string name_value with
@@ -405,28 +385,25 @@ let parse ~path root =
      workbench has none, and failing at parse beats failing at create. *)
   if provision <> None && network = Sealed then
     fail "provision needs a network, but this workbench is sealed";
-  let docker_enabled, herdr_enabled =
-    match find root "services" with
-    | Some table -> parse_services table
-    | None -> (false, false)
+  let herdr_enabled =
+    match find root "services" with Some table -> parse_services table | None -> false
   in
   let ssh =
     match find root "ssh" with Some table -> parse_ssh table | None -> Disabled
   in
-  let backup = parse_backup (sub_table root "backup" "the declaration") in
   let mounts = parse_mounts (find root "mount") in
   (* The credential table is carried through unparsed: each provider module
      owns its own schema, and Declaration should not have to know them all. *)
   let github_credential =
     match find root "credentials" with
     | Some table -> (
-        reject_unknown ~context:"[credentials]" table [ "github"; "kubernetes" ];
+        reject_unknown ~context:"[credentials]" table [ "github" ];
         match find table "github" with Some github -> Some github | None -> None)
     | None -> None
   in
   {
-    path; name; image; provision; resources; network; ssh; docker_enabled; herdr_enabled;
-    backup; mounts; github_credential;
+    path; name; image; provision; resources; network; ssh; herdr_enabled; mounts;
+    github_credential;
   }
 
 let load path =
@@ -465,10 +442,7 @@ let canonical d =
    | Dedicated_agent { key_ref } ->
        line "ssh" "dedicated_agent";
        line "ssh_key_ref" key_ref);
-  line "docker" (string_of_bool d.docker_enabled);
   line "herdr" (string_of_bool d.herdr_enabled);
-  line "backup_directory" d.backup.directory;
-  line "backup_keep" (string_of_int d.backup.keep);
   (* Declaration order is not meaningful, so mounts are sorted by guest path. *)
   List.iter
     (fun mount ->

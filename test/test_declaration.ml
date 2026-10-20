@@ -24,16 +24,12 @@ hosts = ["github.com", "api.github.com"]
 cidrs = ["10.0.0.0/8"]
 
 [services]
-docker = true
 herdr = true
 
 [ssh]
 mode = "dedicated_agent"
 key_ref = "keychain:ade-work-ssh"
 
-[backup]
-directory = "~/ade-backups/work"
-keep = 5
 |}
 
 let loads_valid () =
@@ -220,9 +216,6 @@ workspace_gib = 16
 [network]
 %s
 
-[backup]
-directory = "/tmp/b"
-keep = 1
 |}
     network
 

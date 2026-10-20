@@ -29,8 +29,6 @@ type resources = {
   workspace_gib : int;
 }
 
-type backup = { directory : string; keep : int }
-
 type mount_mode =
   | Read_only
   | Read_write
@@ -68,9 +66,7 @@ val provision : t -> string option
 val resources : t -> resources
 val network : t -> network
 val ssh : t -> ssh
-val docker_enabled : t -> bool
 val herdr_enabled : t -> bool
-val backup : t -> backup
 
 val mounts : t -> mount list
 (** Declared mounts, in declaration order. Nothing is mounted unless declared,

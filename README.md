@@ -181,8 +181,6 @@ tests use a fake runtime. Known gaps:
 
 - The GitHub token check assumes the response carries `repository_selection`
   and `repositories`; confirm on the first real run.
-- `services.docker` is parsed but Docker is never started in the guest.
-- The `[backup]` table is still required but unused since backup was removed.
 - `ade pull` is tested against real git with a simulated guest, not a real VM.
 - `provision/arch.sh` and the allowlist hosts for the Herdr and Claude Code
   installers are untested against the real services.

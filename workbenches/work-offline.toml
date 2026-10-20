@@ -15,12 +15,7 @@ workspace_gib = 128
 posture = "sealed"
 
 [services]
-docker = true
 herdr = true
 
 [ssh]
 mode = "disabled"
-
-[backup]
-directory = "~/ade-backups/work-offline"
-keep = 3
