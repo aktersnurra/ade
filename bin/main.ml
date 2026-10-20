@@ -153,8 +153,28 @@ let rm_command =
     (Cmd.info "rm" ~doc:"Delete the workbench machine and its state")
     Term.(const run $ name_argument $ yes)
 
+let doctor_command =
+  let open Cmdliner in
+  let kvm_usable () =
+    try Unix.access "/dev/kvm" [ Unix.R_OK; Unix.W_OK ]; true
+    with Unix.Unix_error _ -> false
+  in
+  let run () =
+    let checks =
+      Doctor.run ~runner:Process_runner.run
+        ~find_executable:Process_runner.find_executable
+        ~smolvm:(smolvm_executable ()) ~kvm_usable
+    in
+    List.iter (fun check -> print_endline (Doctor.render check)) checks;
+    if Doctor.healthy checks then 0 else 1
+  in
+  Cmd.v
+    (Cmd.info "doctor" ~doc:"Check the host has what ADE needs")
+    Term.(const run $ const ())
+
 let commands =
   [
+    doctor_command;
     simple_command "create" "Create the workbench from its declaration" Lifecycle.create;
     simple_command "start" "Start the workbench" Lifecycle.start;
     simple_command "stop" "Stop the workbench" Lifecycle.stop;

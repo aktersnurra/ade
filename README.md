@@ -13,6 +13,7 @@ existence and state; ADE is the policy around it.
 - `workbenches/` — host-owned declarations, one per workbench
 - `provision/arch.sh` — installs the guest's tooling after creation
 - `docs/smolvm-workbenches.md` — the trust model and credential details
+- `docs/smoke-run.md` — what to check on the first real run
 - `docs/allowlist-workbench-sketch.md` — where this is going next
 
 ## Install
@@ -37,6 +38,7 @@ dune build
 ## Use
 
 ```sh
+ade doctor               # check SmolVM, /dev/kvm, git are in place
 ade create work          # create from the declaration, then provision it
 ade start work           # ensure running
 ade attach work          # start if needed, then attach (Herdr, if enabled)

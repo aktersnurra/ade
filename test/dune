@@ -76,3 +76,8 @@
  (name test_pull)
  (modules test_pull)
  (libraries ade alcotest unix))
+
+(test
+ (name test_doctor)
+ (modules test_doctor)
+ (libraries ade alcotest))
