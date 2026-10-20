@@ -94,9 +94,6 @@ workspace_gib = 16
 [network]
 posture = "public"
 
-[backup]
-directory = "/tmp/b"
-keep = 1
 
 [[mount]]
 host = "%s/code/a"

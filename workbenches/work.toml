@@ -35,13 +35,8 @@ hosts = [
 cidrs = []
 
 [services]
-docker = true
 herdr = true
 
 [ssh]
 mode = "dedicated_agent"
 key_ref = "keychain:ade-work-ssh"
-
-[backup]
-directory = "~/ade-backups/work"
-keep = 5

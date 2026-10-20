@@ -92,8 +92,6 @@ posture = "sealed"
 
 %s
 
-[backup]
-directory = "/tmp/ade-backups"
 |}
        ssh);
   close_out channel;
