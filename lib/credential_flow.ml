@@ -20,7 +20,7 @@ let rotate_github ?http ?runner ~smolvm ~name ~config ~now ~previous () =
   let http =
     match http with
     | Some http -> http
-    | None -> fun ~url ~bearer -> Http.post ~runner ~url ~bearer ()
+    | None -> fun ~url ~bearer ~body -> Http.post ~runner ~url ~bearer ~body ()
   in
   (* Refuse an over-broad configuration before contacting GitHub at all: an
      unscoped token would carry the App's full installation authority. *)

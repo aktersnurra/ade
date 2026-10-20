@@ -115,6 +115,52 @@ let shipped_declaration file expected_network () =
       in
       Alcotest.(check string) "network posture" expected_network actual
 
+let with_mounts mounts = valid_toml ^ "\n" ^ mounts
+
+let mount_table ?(mode = "") ~host ~guest () =
+  Printf.sprintf "[[mount]]\nhost = %S\nguest = %S\n%s\n" host guest
+    (if mode = "" then "" else Printf.sprintf "mode = %S" mode)
+
+(* Undeclared means unmounted, and a declared mount is read-only by default. *)
+let mounts_parse_in_order_and_default_read_only () =
+  let path =
+    write_temp
+      (with_mounts
+         (mount_table ~host:"~/code/a" ~guest:"/src/a" ()
+         ^ mount_table ~host:"/data" ~guest:"/work/data" ~mode:"rw" ()))
+  in
+  match Declaration.load path with
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+  | Ok declaration -> (
+      match Declaration.mounts declaration with
+      | [ a; b ] ->
+          Alcotest.(check string) "first host" "~/code/a" a.Declaration.host;
+          Alcotest.(check bool) "first read-only" true (a.Declaration.mode = Declaration.Read_only);
+          Alcotest.(check string) "second guest" "/work/data" b.Declaration.guest;
+          Alcotest.(check bool) "second writable" true (b.Declaration.mode = Declaration.Read_write)
+      | mounts -> Alcotest.failf "expected two mounts, got %d" (List.length mounts))
+
+let no_mounts_by_default () =
+  match Declaration.load (write_temp valid_toml) with
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check int) "no mounts" 0 (List.length (Declaration.mounts declaration))
+
+(* A mount is part of what the machine is, so it must move the digest. *)
+let mounts_change_the_digest () =
+  let digest contents =
+    match Declaration.load (write_temp contents) with
+    | Ok declaration -> Declaration.digest_hex declaration
+    | Error error -> Alcotest.failf "load: %s" (Ade_error.to_string error)
+  in
+  let ro = with_mounts (mount_table ~host:"/data" ~guest:"/work/data" ()) in
+  let rw = with_mounts (mount_table ~host:"/data" ~guest:"/work/data" ~mode:"rw" ()) in
+  Alcotest.(check bool) "unmounted differs" false (digest valid_toml = digest ro);
+  Alcotest.(check bool) "mode differs" false (digest ro = digest rw)
+
+let rejects_mount fragment ?mode ~guest () =
+  rejects fragment (with_mounts (mount_table ?mode ~host:"/data" ~guest ())) ()
+
 let () =
   Alcotest.run "declaration"
     [ ( "valid",
@@ -142,6 +188,41 @@ let () =
             (rejects "workbench name"
                (replace_line ~find:{|name = "work"|} ~replace:{|name = "work bench"|}
                   valid_toml)) ] );
+      ( "mounts",
+        [ Alcotest.test_case "parse" `Quick mounts_parse_in_order_and_default_read_only;
+          Alcotest.test_case "none by default" `Quick no_mounts_by_default;
+          Alcotest.test_case "digest" `Quick mounts_change_the_digest;
+          Alcotest.test_case "relative guest" `Quick
+            (rejects_mount "absolute" ~guest:"src/a");
+          Alcotest.test_case "guest root" `Quick (rejects_mount "guest root" ~guest:"/");
+          Alcotest.test_case "not normal" `Quick
+            (rejects_mount "normal form" ~guest:"/src/../etc");
+          Alcotest.test_case "trailing slash" `Quick
+            (rejects_mount "normal form" ~guest:"/src/a/");
+          Alcotest.test_case "colon" `Quick (rejects_mount "':'" ~guest:"/src/a:b");
+          Alcotest.test_case "inside workspace" `Quick
+            (rejects_mount "reserved" ~guest:"/workspace/a");
+          Alcotest.test_case "secrets" `Quick
+            (rejects_mount "reserved" ~guest:"/run/ade/secrets");
+          Alcotest.test_case "above maintenance" `Quick
+            (rejects_mount "reserved" ~guest:"/mnt");
+          Alcotest.test_case "unknown mode" `Quick
+            (rejects_mount "mount mode" ~mode:"clone" ~guest:"/src/a");
+          Alcotest.test_case "unknown key" `Quick
+            (rejects "unknown key"
+               (with_mounts "[[mount]]\nhost = \"/data\"\nguest = \"/d\"\nfollow = true\n"));
+          Alcotest.test_case "missing guest" `Quick
+            (rejects "guest" (with_mounts "[[mount]]\nhost = \"/data\"\n"));
+          Alcotest.test_case "overlap" `Quick
+            (rejects "overlap"
+               (with_mounts
+                  (mount_table ~host:"/a" ~guest:"/src" ()
+                  ^ mount_table ~host:"/b" ~guest:"/src/b" ())));
+          Alcotest.test_case "duplicate" `Quick
+            (rejects "overlap"
+               (with_mounts
+                  (mount_table ~host:"/a" ~guest:"/src" ()
+                  ^ mount_table ~host:"/b" ~guest:"/src" ()))) ] );
       ( "shipped",
         [ Alcotest.test_case "work" `Quick
             (shipped_declaration "work.toml" "allowlisted");

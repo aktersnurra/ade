@@ -20,7 +20,11 @@ type resources = {
 
 type backup = { directory : string; keep : int }
 
+type mount_mode = Read_only | Read_write
+type mount = { host : string; guest : string; mode : mount_mode }
+
 type t = {
+  path : string;
   name : Workbench_name.t;
   image : image;
   smolfile : string;
@@ -30,9 +34,11 @@ type t = {
   docker_enabled : bool;
   herdr_enabled : bool;
   backup : backup;
+  mounts : mount list;
   github_credential : Otoml.t option;
 }
 
+let path d = d.path
 let name d = d.name
 let image d = d.image
 
@@ -50,6 +56,7 @@ let ssh d = d.ssh
 let docker_enabled d = d.docker_enabled
 let herdr_enabled d = d.herdr_enabled
 let backup d = d.backup
+let mounts d = d.mounts
 let github_credential d = d.github_credential
 
 (* Parsing is written as a small result-returning reader over the TOML value so
@@ -246,16 +253,95 @@ let parse_backup table =
   in
   { directory; keep }
 
+(* Guest paths the runtime or ADE itself owns. A mount at, inside or above one
+   of these would hide what ADE relies on: the system, credentials in
+   /run/ade/secrets, the storage-backed /workspace (whose export must never
+   carry host files), or the maintenance mount points. *)
+let reserved_guest_paths =
+  [ "/bin"; "/boot"; "/dev"; "/etc"; "/lib"; "/lib64"; "/nix"; "/proc"; "/run";
+    "/sbin"; "/sys"; "/tmp"; "/usr"; "/var"; "/workspace"; "/mnt/ade-export";
+    "/mnt/ade-import" ]
+
+let is_within ~ancestor path =
+  path = ancestor
+  || ancestor = "/"
+  || (let prefix = ancestor ^ "/" in
+      String.length path > String.length prefix
+      && String.sub path 0 (String.length prefix) = prefix)
+
+(* Guest paths must already be in normal form. Normalizing silently would let
+   two spellings of one path slip past the overlap check. *)
+let validate_guest_path guest =
+  let quoted = Filename.quote guest in
+  if guest = "" || guest.[0] <> '/' then
+    fail (Printf.sprintf "mount guest path %s must be absolute" quoted);
+  if String.contains guest ':' then
+    fail (Printf.sprintf "mount guest path %s must not contain ':'" quoted);
+  if guest = "/" then fail "a mount may not target the guest root";
+  (match String.split_on_char '/' guest with
+   | "" :: components ->
+       if List.exists (fun c -> c = "" || c = "." || c = "..") components then
+         fail (Printf.sprintf "mount guest path %s is not in normal form" quoted)
+   | _ -> fail (Printf.sprintf "mount guest path %s must be absolute" quoted));
+  match
+    List.find_opt
+      (fun reserved -> is_within ~ancestor:reserved guest || is_within ~ancestor:guest reserved)
+      reserved_guest_paths
+  with
+  | Some reserved ->
+      fail (Printf.sprintf "mount guest path %s overlaps reserved %s" quoted reserved)
+  | None -> guest
+
+let parse_mount table =
+  reject_unknown ~context:"[[mount]]" table [ "host"; "guest"; "mode" ];
+  let host = as_string "mount.host" (require table "host" "[[mount]]") in
+  if host = "" then fail "mount.host must not be empty";
+  let guest = validate_guest_path (as_string "mount.guest" (require table "guest" "[[mount]]")) in
+  (* Read-only unless written out: write access is the grant that matters. *)
+  let mode =
+    match find table "mode" with
+    | None -> Read_only
+    | Some value -> (
+        match as_string "mount.mode" value with
+        | "ro" -> Read_only
+        | "rw" -> Read_write
+        | other ->
+            fail
+              (Printf.sprintf "unknown mount mode %s (expected ro or rw)" (Filename.quote other)))
+  in
+  { host; guest; mode }
+
+(* Nested guest mounts are refused until their semantics are qualified on the
+   pinned runtime: which one wins, and whether a read-only inner mount really
+   holds under a writable outer one. *)
+let parse_mounts = function
+  | None -> []
+  | Some (Otoml.TomlTableArray tables) | Some (Otoml.TomlArray tables) ->
+      let mounts = List.map parse_mount tables in
+      List.iteri
+        (fun i a ->
+          List.iteri
+            (fun j b ->
+              if i < j && (is_within ~ancestor:a.guest b.guest || is_within ~ancestor:b.guest a.guest)
+              then
+                fail
+                  (Printf.sprintf "mount guest paths %s and %s overlap" (Filename.quote a.guest)
+                     (Filename.quote b.guest)))
+            mounts)
+        mounts;
+      mounts
+  | Some _ -> fail "mount must be an array of tables ([[mount]])"
+
 let sub_table root key context =
   match find root key with
   | Some (Otoml.TomlTable _ as table) | Some (Otoml.TomlInlineTable _ as table) -> table
   | Some _ -> fail (Printf.sprintf "[%s] must be a table" key)
   | None -> fail (Printf.sprintf "missing table [%s] in %s" key context)
 
-let parse root =
+let parse ~path root =
   reject_unknown ~context:"the declaration" root
     [ "name"; "image"; "smolfile"; "resources"; "network"; "services"; "ssh";
-      "backup"; "credentials" ];
+      "backup"; "mount"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
     match Workbench_name.of_string name_value with
@@ -277,6 +363,7 @@ let parse root =
     match find root "ssh" with Some table -> parse_ssh table | None -> Disabled
   in
   let backup = parse_backup (sub_table root "backup" "the declaration") in
+  let mounts = parse_mounts (find root "mount") in
   (* The credential table is carried through unparsed: each provider module
      owns its own schema, and Declaration should not have to know them all. *)
   let github_credential =
@@ -287,8 +374,8 @@ let parse root =
     | None -> None
   in
   {
-    name; image; smolfile; resources; network; ssh; docker_enabled; herdr_enabled;
-    backup; github_credential;
+    path; name; image; smolfile; resources; network; ssh; docker_enabled; herdr_enabled;
+    backup; mounts; github_credential;
   }
 
 let load path =
@@ -297,7 +384,7 @@ let load path =
     match Otoml.Parser.from_file_result path with
     | Error reason -> Error (Ade_error.Declaration_invalid { path; reason })
     | Ok root -> (
-        match parse root with
+        match parse ~path root with
         | declaration -> Ok declaration
         | exception Invalid reason -> Error (Ade_error.Declaration_invalid { path; reason })
         | exception Not_found ->
@@ -331,6 +418,13 @@ let canonical d =
   line "herdr" (string_of_bool d.herdr_enabled);
   line "backup_directory" d.backup.directory;
   line "backup_keep" (string_of_int d.backup.keep);
+  (* Declaration order is not meaningful, so mounts are sorted by guest path. *)
+  List.iter
+    (fun mount ->
+      line "mount"
+        (Printf.sprintf "%s:%s:%s" mount.host mount.guest
+           (match mount.mode with Read_only -> "ro" | Read_write -> "rw")))
+    (List.sort (fun a b -> String.compare a.guest b.guest) d.mounts);
   Buffer.contents buffer
 
 let digest_hex d = Digestif.SHA256.(digest_string (canonical d) |> to_hex)

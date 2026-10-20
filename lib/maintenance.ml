@@ -21,34 +21,46 @@ let failed operation reason = Ade_error.Operation_refused { operation; reason }
 let transaction_id () =
   Printf.sprintf "t-%.0f-%d" (Unix.gettimeofday ()) (Unix.getpid ())
 
-let ensure_stopped smolvm name =
-  let* state = Smolvm.state smolvm name in
-  match state with
-  | Smolvm.Running -> Smolvm.stop smolvm name
-  | _ -> Ok ()
+(* Every stop and start goes through Boot, so the host agent follows the
+   machine and a maintenance window never runs with the workbench's identity
+   loaded or its credentials installed. *)
+type context = {
+  services : Boot.services;
+  smolvm : Smolvm.t;
+  paths : State_paths.t;
+  declaration : Declaration.t;
+}
 
-let ensure_started smolvm name =
-  let* state = Smolvm.state smolvm name in
+let ensure_stopped c name =
+  let* state = Smolvm.state c.smolvm name in
+  match state with
+  | Smolvm.Running -> Boot.stop ~services:c.services ~smolvm:c.smolvm ~paths:c.paths name
+  | _ -> Boot.release_agent ~services:c.services ~paths:c.paths name
+
+let ensure_started ?(purpose = Boot.Maintenance) c name =
+  let* state = Smolvm.state c.smolvm name in
   match state with
   | Smolvm.Running -> Ok ()
   | Smolvm.Absent -> Error (failed "maintenance" "the machine does not exist")
-  | _ -> Smolvm.start smolvm name
+  | _ ->
+      Boot.start ~services:c.services ~smolvm:c.smolvm ~paths:c.paths ~name ~purpose
+        c.declaration
 
 (* Export /workspace into a host staging directory.
 
    The machine is started for a bounded maintenance window with no injected
    secrets, no Docker or Herdr startup, and no populated SSH agent: the guest
    is untrusted, and this window exists only to read the workspace out. *)
-let export_workspace smolvm name ~staging =
+let export_workspace c name ~staging =
   let* () = State_paths.ensure_dir staging in
-  let* () = ensure_stopped smolvm name in
+  let* () = ensure_stopped c name in
   let* () =
-    Smolvm.attach_volume smolvm name ~host:staging ~guest:export_mount ~read_only:false
+    Smolvm.attach_volume c.smolvm name ~host:staging ~guest:export_mount ~read_only:false
   in
-  let* () = ensure_started smolvm name in
-  let* () = Smolvm.exec_checked smolvm name [ export_helper; export_mount ] in
-  let* () = ensure_stopped smolvm name in
-  let* () = Smolvm.detach_volume smolvm name ~guest:export_mount in
+  let* () = ensure_started c name in
+  let* () = Smolvm.exec_checked c.smolvm name [ export_helper; export_mount ] in
+  let* () = ensure_stopped c name in
+  let* () = Smolvm.detach_volume c.smolvm name ~guest:export_mount in
   Ok (Filename.concat staging archive_name)
 
 (* Validate the untrusted export on the host. The manifest proves integrity
@@ -61,33 +73,37 @@ let validate_export staging =
     Error (failed "workspace export" "the export is empty")
   else Ok (Workspace_bundle.manifest_digest manifest)
 
-let restore_workspace smolvm name ~staging =
-  let* () = ensure_stopped smolvm name in
+let restore_workspace c name ~staging =
+  let* () = ensure_stopped c name in
   let* () =
-    Smolvm.attach_volume smolvm name ~host:staging ~guest:import_mount ~read_only:true
+    Smolvm.attach_volume c.smolvm name ~host:staging ~guest:import_mount ~read_only:true
   in
-  let* () = ensure_started smolvm name in
-  let* () = Smolvm.exec_checked smolvm name [ restore_helper; import_mount ] in
-  let* () = ensure_stopped smolvm name in
-  Smolvm.detach_volume smolvm name ~guest:import_mount
+  let* () = ensure_started c name in
+  let* () = Smolvm.exec_checked c.smolvm name [ restore_helper; import_mount ] in
+  let* () = ensure_stopped c name in
+  Smolvm.detach_volume c.smolvm name ~guest:import_mount
 
-let backup ~smolvm ~paths ~declaration ~destination =
-  ignore paths;
+let backup ~services ~smolvm ~paths ~declaration ~destination =
+  let c = { services; smolvm; paths; declaration } in
   let name = Declaration.name declaration in
   let* original = Smolvm.state smolvm name in
-  let* _archive = export_workspace smolvm name ~staging:destination in
+  let* _archive = export_workspace c name ~staging:destination in
   let* digest = validate_export destination in
   (* Restore whatever state the source was in; a previously running workbench
-     goes back through the normal startup checks. *)
+     goes back through the normal startup, identity and credentials included. *)
   let* () =
     match original with
-    | Smolvm.Running -> Result.map ignore (ensure_started smolvm name)
+    | Smolvm.Running -> ensure_started ~purpose:Boot.Work c name
     | _ -> Ok ()
   in
   Ok { performed = [ "export"; "validate"; "restore-state" ]; manifest_digest = Some digest }
 
-let restore ~smolvm ~paths ~declaration ~archive ~mode =
-  ignore paths;
+let create_machine smolvm ~paths declaration =
+  let* mounts = Host_mount.for_declaration ~paths declaration in
+  Smolvm.create smolvm declaration ~mounts
+
+let restore ~services ~smolvm ~paths ~declaration ~archive ~mode =
+  let c = { services; smolvm; paths; declaration } in
   let staging = Filename.dirname archive in
   let* digest = validate_export staging in
   let* target =
@@ -98,13 +114,14 @@ let restore ~smolvm ~paths ~declaration ~archive ~mode =
         if state <> Smolvm.Absent then
           Error (failed "restore" "the target machine already exists")
         else
-          let* () = Smolvm.create smolvm declaration in
+          let* () = create_machine smolvm ~paths declaration in
           Ok target
   in
-  let* () = restore_workspace smolvm target ~staging in
+  let* () = restore_workspace c target ~staging in
   Ok { performed = [ "validate"; "restore" ]; manifest_digest = Some digest }
 
-let reimage ~smolvm ~paths ~declaration ~force_quiesce =
+let reimage ~services ~smolvm ~paths ~declaration ~force_quiesce =
+  let c = { services; smolvm; paths; declaration } in
   let name = Declaration.name declaration in
   let journal_path = State_paths.journal_file paths name in
   let* existing = Reimage.read ~path:journal_path in
@@ -143,7 +160,7 @@ let reimage ~smolvm ~paths ~declaration ~force_quiesce =
         let write journal = Reimage.write ~path:journal_path journal in
         let* () = write (base Reimage.Quiescing) in
         let* () = write (base Reimage.Exporting) in
-        let* _archive = export_workspace smolvm name ~staging in
+        let* _archive = export_workspace c name ~staging in
         let* manifest = validate_export staging in
         (* The verified manifest is recorded before anything irreversible: past
            this point the export is the only remaining copy of the workspace,
@@ -157,14 +174,14 @@ let reimage ~smolvm ~paths ~declaration ~force_quiesce =
         let* () =
           write { verified with Reimage.phase = Reimage.Old_machine_deleted }
         in
-        let* () = Smolvm.create smolvm declaration in
+        let* () = create_machine smolvm ~paths declaration in
         let* () =
           write { verified with Reimage.phase = Reimage.New_machine_created }
         in
         let* () = write { verified with Reimage.phase = Reimage.Restoring } in
-        let* () = restore_workspace smolvm name ~staging in
+        let* () = restore_workspace c name ~staging in
         let* () = write { verified with Reimage.phase = Reimage.Qualifying } in
-        let* () = ensure_stopped smolvm name in
+        let* () = ensure_stopped c name in
         let* () = write { verified with Reimage.phase = Reimage.Committed } in
         (* The journal is not a second lifecycle database; it is removed once
            the transaction commits. *)
@@ -187,7 +204,8 @@ let pack ~smolvm ~declaration ~output =
     let* () = Smolvm.pack smolvm name ~output in
     Ok { performed = [ "pack" ]; manifest_digest = None }
 
-let destroy ~smolvm ~paths ~declaration ~request ~backup_destination =
+let destroy ~services ~smolvm ~paths ~declaration ~request ~backup_destination =
+  let c = { services; smolvm; paths; declaration } in
   let name = Declaration.name declaration in
   let journal_path = State_paths.journal_file paths name in
   let* journal = Reimage.read ~path:journal_path in
@@ -197,13 +215,13 @@ let destroy ~smolvm ~paths ~declaration ~request ~backup_destination =
       let* backed_up =
         match (choice, backup_destination) with
         | Destroy.Backup_first, Some destination ->
-            let* result = backup ~smolvm ~paths ~declaration ~destination in
+            let* result = backup ~services ~smolvm ~paths ~declaration ~destination in
             Ok result.manifest_digest
         | Destroy.Backup_first, None ->
             Error (failed "destroy" "a backup was requested but no destination was given")
         | Destroy.No_backup, _ -> Ok None
       in
-      let* () = ensure_stopped smolvm name in
+      let* () = ensure_stopped c name in
       let* () = Smolvm.delete smolvm name in
       Ok
         {

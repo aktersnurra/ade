@@ -4,6 +4,8 @@ type t = { socket : string; pid : string; populated : bool }
 
 let socket_path t = t.socket
 let is_populated t = t.populated
+let pid t = t.pid
+let of_record ~socket ~pid ~populated = { socket; pid; populated }
 
 let ( let* ) = Result.bind
 

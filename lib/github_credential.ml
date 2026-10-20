@@ -12,6 +12,7 @@ type error =
   | Exchange_failed of { status : int; body : string }
   | Malformed_response of string
   | Signing_failed of string
+  | Scope_exceeded of string
 
 let describe_error = function
   | Missing_private_key path -> "the GitHub App private key is not readable at " ^ path
@@ -21,6 +22,8 @@ let describe_error = function
         (String.trim body)
   | Malformed_response reason -> "unreadable GitHub response: " ^ reason
   | Signing_failed reason -> "could not sign the GitHub App JWT: " ^ reason
+  | Scope_exceeded reason ->
+      "GitHub issued a token broader than requested, so it was discarded: " ^ reason
 
 let ( let* ) = Result.bind
 
@@ -79,6 +82,39 @@ let load_config table =
   let* permissions = pairs_field table "permissions" in
   Ok { app_id; installation_id; private_key; repositories; permissions }
 
+(* The token request names repositories without their owner: an installation
+   belongs to one account, so every declared repository must be under it. *)
+let repository_names config =
+  let split full =
+    match String.split_on_char '/' full with
+    | [ owner; name ] when owner <> "" && name <> "" -> Ok (Some owner, name)
+    | [ name ] when name <> "" -> Ok (None, name)
+    | _ -> Error (Invalid_config ("malformed repository " ^ Filename.quote full))
+  in
+  let* parsed =
+    List.fold_left
+      (fun acc full ->
+        let* acc = acc in
+        let* entry = split full in
+        Ok (entry :: acc))
+      (Ok []) config.repositories
+    |> Result.map List.rev
+  in
+  match List.sort_uniq String.compare (List.filter_map fst parsed) with
+  | [] | [ _ ] -> Ok (List.map snd parsed)
+  | owners ->
+      Error
+        (Invalid_config
+           ("repositories span several owners (" ^ String.concat ", " owners
+          ^ "); one installation covers one account"))
+
+(* Write is the broadest level ADE will request. admin would let the token
+   change the repository's own settings, which is not an agent's job. *)
+let level_rank = function "read" -> Some 1 | "write" -> Some 2 | _ -> None
+
+let valid_permission_name name =
+  name <> "" && String.for_all (function 'a' .. 'z' | '_' -> true | _ -> false) name
+
 (* A token with no declared repositories reaches every repository the App is
    installed on, which is exactly the blast radius the design tries to avoid. *)
 let validate config =
@@ -95,9 +131,84 @@ let validate config =
       (Invalid_config
          "no permissions declared; the token would carry the App's full \
           installation authority")
-  else Ok ()
+  else
+    let* _ = repository_names config in
+    match
+      List.find_opt
+        (fun (name, level) -> not (valid_permission_name name && level_rank level <> None))
+        config.permissions
+    with
+    | Some (name, level) ->
+        Error
+          (Invalid_config
+             (Printf.sprintf "permission %s = %s; expected read or write" name
+                (Filename.quote level)))
+    | None -> Ok ()
 
-type http_post = url:string -> bearer:string -> (int * string, string) result
+type http_post =
+  url:string -> bearer:string -> body:string -> (int * string, string) result
+
+(* The scope travels in the request body. Without it GitHub issues a token
+   with the installation's full authority, whatever the declaration says. *)
+let request_body config =
+  let* names = repository_names config in
+  Ok
+    (Yojson.Safe.to_string
+       (`Assoc
+         [
+           ("repositories", `List (List.map (fun name -> `String name) names));
+           ( "permissions",
+             `Assoc (List.map (fun (name, level) -> (name, `String level)) config.permissions) );
+         ]))
+
+(* GitHub echoes the scope it actually granted. It is checked rather than
+   trusted, so a request that was silently widened (an App or API change, a
+   proxy rewriting the body) never reaches the guest. metadata:read is granted
+   to every installation token and cannot be declined. *)
+let check_granted_scope config json =
+  let member name = Yojson.Safe.Util.member name json in
+  let* () =
+    match member "repository_selection" with
+    | `String "selected" -> Ok ()
+    | `String other -> Error (Scope_exceeded ("repository_selection is " ^ other))
+    | _ -> Error (Scope_exceeded "the response does not state its repository selection")
+  in
+  let* names = repository_names config in
+  let* () =
+    match member "repositories" with
+    | `List repositories -> (
+        let granted =
+          List.filter_map
+            (fun repository ->
+              match Yojson.Safe.Util.member "name" repository with
+              | `String name -> Some name
+              | _ -> None)
+            repositories
+        in
+        match List.find_opt (fun name -> not (List.mem name names)) granted with
+        | Some extra -> Error (Scope_exceeded ("granted undeclared repository " ^ extra))
+        | None -> Ok ())
+    | _ -> Error (Scope_exceeded "the response does not list its repositories")
+  in
+  match member "permissions" with
+  | `Assoc granted -> (
+      let exceeds (name, level) =
+        match (level, List.assoc_opt name config.permissions) with
+        | `String "read", _ when name = "metadata" -> false
+        | `String level, Some requested -> (
+            match (level_rank level, level_rank requested) with
+            | Some got, Some asked -> got > asked
+            | _ -> true)
+        | _ -> true
+      in
+      match List.find_opt exceeds granted with
+      | Some (name, level) ->
+          Error
+            (Scope_exceeded
+               (Printf.sprintf "permission %s = %s was not requested" name
+                  (Yojson.Safe.to_string level)))
+      | None -> Ok ())
+  | _ -> Error (Scope_exceeded "the response does not state its permissions")
 
 let token_url config =
   "https://api.github.com/app/installations/" ^ config.installation_id
@@ -228,7 +339,8 @@ let parse_expiry text =
   with _ -> None
 
 let exchange ~post config ~jwt ~now =
-  match post ~url:(token_url config) ~bearer:jwt with
+  let* body = request_body config in
+  match post ~url:(token_url config) ~bearer:jwt ~body with
   | Error reason -> Error (Malformed_response reason)
   | Ok (status, body) when status < 200 || status >= 300 ->
       Error (Exchange_failed { status; body })
@@ -239,6 +351,7 @@ let exchange ~post config ~jwt ~now =
           let member name = Yojson.Safe.Util.member name json in
           match member "token" with
           | `String value ->
+              let* () = check_granted_scope config json in
               let expires_at =
                 match member "expires_at" with
                 | `String text -> (

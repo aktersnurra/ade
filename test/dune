@@ -95,7 +95,7 @@
 (test
  (name test_github_credential)
  (modules test_github_credential)
- (libraries ade alcotest))
+ (libraries ade alcotest yojson))
 
 (test
  (name test_secret)
@@ -116,4 +116,14 @@
 (test
  (name test_credential_flow)
  (modules test_credential_flow)
+ (libraries ade alcotest))
+
+(test
+ (name test_host_mount)
+ (modules test_host_mount)
+ (libraries ade alcotest unix))
+
+(test
+ (name test_boot)
+ (modules test_boot)
  (libraries ade alcotest))

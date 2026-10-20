@@ -30,9 +30,21 @@ type resources = {
 
 type backup = { directory : string; keep : int }
 
+type mount_mode = Read_only | Read_write
+
+type mount = { host : string; guest : string; mode : mount_mode }
+(** A host directory made visible in the guest. [host] is as written, which may
+    start with [~/]; {!Host_mount} resolves and polices it on the host. [guest]
+    is validated here: absolute, in normal form, clear of reserved guest paths
+    and of every other mount. *)
+
 type t
 
 val load : string -> (t, Ade_error.t) result
+
+val path : t -> string
+(** The file this declaration was loaded from. *)
+
 val name : t -> Workbench_name.t
 val image : t -> image
 
@@ -47,6 +59,10 @@ val ssh : t -> ssh
 val docker_enabled : t -> bool
 val herdr_enabled : t -> bool
 val backup : t -> backup
+
+val mounts : t -> mount list
+(** Declared mounts, in declaration order. Nothing is mounted unless declared,
+    and a mount is read-only unless it says [mode = "rw"]. *)
 
 val github_credential : t -> Otoml.t option
 (** The raw [[credentials.github]] table, if declared. Left unparsed here so

@@ -14,6 +14,10 @@ val make : ?root:string -> unit -> t
 val root : t -> string
 val lock_file : t -> Workbench_name.t -> string
 val journal_file : t -> Workbench_name.t -> string
+val ssh_agent_file : t -> Workbench_name.t -> string
+(** Where the running workbench's host agent is recorded, so a later [stop] can
+    find and stop it. *)
+
 val credentials_dir : t -> Workbench_name.t -> string
 val staging_dir : t -> Workbench_name.t -> transaction_id:string -> string
 

@@ -17,6 +17,7 @@ type config = {
           on the host: only the derived, expiring installation token reaches the
           guest. *)
   repositories : string list;
+      (** [owner/name] or [name]; all under the installation's one account. *)
   permissions : (string * string) list;  (** e.g. [("contents", "write")] *)
 }
 
@@ -26,6 +27,8 @@ type error =
   | Exchange_failed of { status : int; body : string }
   | Malformed_response of string
   | Signing_failed of string
+  | Scope_exceeded of string
+      (** GitHub granted more than was requested; the token is discarded. *)
 
 val describe_error : error -> string
 
@@ -33,10 +36,16 @@ val load_config : Otoml.t -> (config, error) result
 (** Read the [[credentials.github]] table of a workbench declaration. *)
 
 val validate : config -> (unit, error) result
-(** Refuse a configuration that would mint an over-broad credential. *)
+(** Refuse a configuration that would mint an over-broad credential: no
+    repositories, no permissions, a level other than read or write, or
+    repositories under more than one owner. *)
+
+val request_body : config -> (string, error) result
+(** The JSON body of the token request, carrying the declared repositories (by
+    name) and permissions. This is what scopes the token. *)
 
 type http_post =
-  url:string -> bearer:string -> (int * string, string) result
+  url:string -> bearer:string -> body:string -> (int * string, string) result
 (** The HTTP boundary, abstract so the exchange is testable without contacting
     GitHub. *)
 
@@ -45,7 +54,9 @@ val token_url : config -> string
 val exchange :
   post:http_post -> config -> jwt:string -> now:float ->
   (Provider.minted, error) result
-(** Exchange a signed App JWT for an installation token. *)
+(** Exchange a signed App JWT for an installation token scoped to the declared
+    repositories and permissions, and refuse the token if GitHub's response
+    shows a broader grant. *)
 
 val base64url : string -> string
 (** JWT uses base64url without padding, not standard base64. *)

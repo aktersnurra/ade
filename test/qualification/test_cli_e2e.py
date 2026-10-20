@@ -26,6 +26,18 @@ class CliEndToEndTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.state_file = self.tmp / "machines.json"
         self.log_file = self.tmp / "calls.log"
+        self.declarations = self.tmp / "workbenches"
+        shutil.copytree(REPO_ROOT / "workbenches", self.declarations)
+        # The shipped declaration with its SSH identity disabled: these tests
+        # are about lifecycle convergence, and starting a dedicated agent needs
+        # a real ssh-agent and key. test_boot covers the agent sequence.
+        work = (self.declarations / "work.toml").read_text()
+        disabled = work.replace(
+            'mode = "dedicated_agent"\nkey_ref = "keychain:ade-work-ssh"',
+            'mode = "disabled"',
+        )
+        assert disabled != work, "work.toml [ssh] table changed; update this test"
+        (self.declarations / "work.toml").write_text(disabled)
 
     def fake_runtime(self):
         """A wrapper that bakes the fake's settings into the script itself.
@@ -48,7 +60,7 @@ class CliEndToEndTest(unittest.TestCase):
         env = dict(os.environ)
         env["ADE_SMOLVM_BIN"] = str(self.fake_runtime())
         env["ADE_STATE_ROOT"] = str(self.tmp / "state")
-        env["ADE_WORKBENCHES_DIR"] = str(REPO_ROOT / "workbenches")
+        env["ADE_WORKBENCHES_DIR"] = str(self.declarations)
         return subprocess.run(
             [str(ADE), *args], env=env, capture_output=True, text=True, timeout=60
         )

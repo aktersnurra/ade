@@ -1,9 +1,26 @@
 open Ade
 
+(* Host effects are inert here: no real ssh-agent, no GitHub. Boot's own
+   sequencing is tested in test_boot. *)
+let services =
+  {
+    Boot.start_agent =
+      (fun ~name:_ ~mode ~identity:_ ->
+        Ok
+          (Ssh_agent.of_record ~socket:"/nonexistent/agent.sock" ~pid:"0"
+             ~populated:(mode = Ssh_agent.Populated)));
+    stop_agent = (fun _ -> Ok ());
+    install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+  }
+
 (* A scripted fake runtime: it holds a machine state that create/start/stop
    mutate, so convergence is tested as a state machine rather than by asserting
    on command strings. *)
-type fake = { mutable state : string; mutable calls : string list }
+type fake = {
+  mutable state : string;
+  mutable calls : string list;
+  mutable last_argv : string list;
+}
 
 let runner fake request =
   let subcommand =
@@ -12,6 +29,7 @@ let runner fake request =
     | _ -> ""
   in
   fake.calls <- subcommand :: fake.calls;
+  fake.last_argv <- request.Process_runner.argv;
   match subcommand with
   | "status" ->
       if fake.state = "absent" then
@@ -40,10 +58,10 @@ let temp_root () =
   path
 
 let setup initial =
-  let fake = { state = initial; calls = [] } in
+  let fake = { state = initial; calls = []; last_argv = [] } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
   let paths = State_paths.make ~root:(temp_root ()) () in
-  (fake, Lifecycle.make ~smolvm ~paths)
+  (fake, Lifecycle.make ~services ~smolvm ~paths)
 
 let declaration () =
   match Declaration.load "../workbenches/work.toml" with
@@ -92,6 +110,22 @@ let restarting_a_stopped_machine_starts_it () =
   let fake, lifecycle = setup "stopped" in
   check_outcome "restart" Lifecycle.Changed (Lifecycle.restart lifecycle (declaration ()));
   Alcotest.(check string) "state" "running" fake.state
+
+(* A bare attach to a Herdr workbench lands in Herdr; an explicit command is
+   run as given. *)
+let bare_attach_opens_herdr () =
+  let fake, lifecycle = setup "running" in
+  (match Lifecycle.attach lifecycle (declaration ()) ~command:[] with
+   | Ok () -> ()
+   | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
+  Alcotest.(check (list string)) "herdr" [ "--"; "herdr" ]
+    (match List.rev fake.last_argv with
+     | last :: dashdash :: _ -> [ dashdash; last ]
+     | _ -> []);
+  (match Lifecycle.attach lifecycle (declaration ()) ~command:[ "bash" ] with
+   | Ok () -> ()
+   | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
+  Alcotest.(check string) "explicit" "bash" (List.nth fake.last_argv (List.length fake.last_argv - 1))
 
 let attaching_to_a_stopped_machine_starts_it () =
   let fake, lifecycle = setup "stopped" in
@@ -152,7 +186,8 @@ let () =
           Alcotest.test_case "stop running" `Quick stopping_a_running_machine_stops_it;
           Alcotest.test_case "restart" `Quick restarting_a_stopped_machine_starts_it ] );
       ( "attach",
-        [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it ] );
+        [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
+          Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );
       ( "convergence",
         [ Alcotest.test_case "idempotent" `Quick commands_are_idempotent;
           Alcotest.test_case "status" `Quick status_reports_observed_state;

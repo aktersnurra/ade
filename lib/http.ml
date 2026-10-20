@@ -1,4 +1,4 @@
-let post ?runner ?(curl = "/usr/bin/curl") ~url ~bearer () =
+let post ?runner ?(curl = "/usr/bin/curl") ~url ~bearer ~body () =
   let runner = match runner with Some r -> r | None -> Process_runner.run in
   (* The bearer token goes in via @- (stdin) rather than -H on the command
      line, so it never appears in argv where another local process could read
@@ -16,6 +16,11 @@ let post ?runner ?(curl = "/usr/bin/curl") ~url ~bearer () =
           "--header"; "Accept: application/vnd.github+json";
           "--header"; "X-GitHub-Api-Version: 2022-11-28";
           "--header"; "@-";
+          (* The body is the requested scope: repository names and
+             permission levels. It is not secret, so argv is acceptable;
+             stdin is already carrying the bearer header. *)
+          "--header"; "Content-Type: application/json";
+          "--data-binary"; body;
           "--write-out"; "\n%{http_code}";
           url;
         ];

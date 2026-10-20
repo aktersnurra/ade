@@ -58,6 +58,55 @@ Every command states an intended end state and is safe to repeat. Creating an
 existing machine converges rather than recreating it, which would destroy the
 workspace.
 
+## Mounts
+
+Nothing on the host is visible in a workbench unless its declaration mounts it:
+
+```toml
+[[mount]]
+host = "~/code/project-a"
+guest = "/src/project-a"        # read-only unless mode = "rw"
+
+[[mount]]
+host = "~/scratch/data"
+guest = "/work/data"
+mode = "rw"
+```
+
+Each host path is resolved, symlinks included, on the host that creates the
+machine. ADE refuses the home directory and its ancestors; credential and
+configuration stores (`~/.ssh`, `~/.gnupg`, `~/.config`, `~/.local/share`,
+`~/Library` and similar); and its own state and declarations. It also refuses
+a writable mount containing `.git` or `.jj`, because hooks, VCS config and
+the jj operation log all act on the host the next time you run git or jj
+there. Guest paths may not overlap each other or `/workspace`, `/run` and
+the other system paths.
+
+Mounts are applied when the machine is created. Adding one to an existing
+workbench takes effect after it is recreated.
+
+## What start does
+
+`ade start`, and `attach` and `exec` when the workbench is stopped, bring it up
+in this order. If a step fails, the steps before it are undone, so a failed
+start leaves nothing running:
+
+1. With `[ssh] mode = "dedicated_agent"`, start a host `ssh-agent` holding only
+   the key named by `key_ref`. The VM gets this agent's socket, never yours,
+   and never the key.
+2. Boot the VM.
+3. With `[credentials.github]`, mint an installation token and install it into
+   guest tmpfs.
+
+`ade stop` stops the VM, then its agent. `ade attach NAME` with no command opens
+Herdr when `services.herdr = true`. Agents are started from there.
+
+Secret references (`key_ref`, `private_key_path`) take `keychain:ITEM` (macOS
+Keychain), `pass:ENTRY` (password-store, the whole entry) or `file:PATH`.
+
+A workbench created before `--ssh-agent` was passed at creation does not get
+the agent forwarded until it is recreated.
+
 ## Trust model
 
 A workbench VM is one security principal. Agents, tools and containers inside

@@ -1,5 +1,18 @@
 open Ade
 
+(* Host effects are inert here: no real ssh-agent, no GitHub. Boot's own
+   sequencing is tested in test_boot. *)
+let services =
+  {
+    Boot.start_agent =
+      (fun ~name:_ ~mode ~identity:_ ->
+        Ok
+          (Ssh_agent.of_record ~socket:"/nonexistent/agent.sock" ~pid:"0"
+             ~populated:(mode = Ssh_agent.Populated)));
+    stop_agent = (fun _ -> Ok ());
+    install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+  }
+
 (* A fake runtime that records the exact order of operations. The ordering is
    the safety property under test: an irreversible step must never precede the
    verification that justifies it. *)
@@ -79,7 +92,7 @@ let index_of needle calls =
    export has been verified. *)
 let deletion_follows_verification () =
   let fake, smolvm, paths = setup "running" in
-  let _ = Maintenance.reimage ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
+  let _ = Maintenance.reimage ~services ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true in
   match (index_of "delete" fake.calls, index_of "exec" fake.calls) with
   | Some delete_at, Some export_at ->
       Alcotest.(check bool) "export precedes delete" true (export_at < delete_at)
@@ -91,7 +104,7 @@ let reimage_leaves_the_workbench_stopped () =
   List.iter
     (fun initial ->
       let fake, smolvm, paths = setup initial in
-      match Maintenance.reimage ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true with
+      match Maintenance.reimage ~services ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:true with
       | Ok _ -> Alcotest.(check string) ("stopped from " ^ initial) "stopped" fake.state
       | Error e -> Alcotest.failf "reimage from %s: %s" initial (Ade_error.to_string e))
     [ "running"; "stopped" ]
@@ -99,7 +112,7 @@ let reimage_leaves_the_workbench_stopped () =
 (* Refusing to quiesce protects running agents from losing work. *)
 let reimage_refuses_running_agents_without_force () =
   let _, smolvm, paths = setup "running" in
-  match Maintenance.reimage ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:false with
+  match Maintenance.reimage ~services ~smolvm ~paths ~declaration:(declaration ()) ~force_quiesce:false with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "expected a running workbench to require explicit quiescence"
 
@@ -108,7 +121,7 @@ let reimage_refuses_running_agents_without_force () =
 let a_committed_reimage_leaves_no_journal () =
   let _, smolvm, paths = setup "stopped" in
   let d = declaration () in
-  match Maintenance.reimage ~smolvm ~paths ~declaration:d ~force_quiesce:true with
+  match Maintenance.reimage ~services ~smolvm ~paths ~declaration:d ~force_quiesce:true with
   | Error e -> Alcotest.failf "reimage: %s" (Ade_error.to_string e)
   | Ok _ -> (
       let journal = State_paths.journal_file paths (Declaration.name d) in
@@ -124,7 +137,7 @@ let backup_restores_the_original_state () =
     (fun initial ->
       let fake, smolvm, paths = setup initial in
       match
-        Maintenance.backup ~smolvm ~paths ~declaration:(declaration ())
+        Maintenance.backup ~services ~smolvm ~paths ~declaration:(declaration ())
           ~destination:(temp_root ())
       with
       | Ok _ -> Alcotest.(check string) ("restored " ^ initial) initial fake.state
@@ -134,7 +147,7 @@ let backup_restores_the_original_state () =
 let backup_never_deletes_the_machine () =
   let fake, smolvm, paths = setup "running" in
   let _ =
-    Maintenance.backup ~smolvm ~paths ~declaration:(declaration ()) ~destination:(temp_root ())
+    Maintenance.backup ~services ~smolvm ~paths ~declaration:(declaration ()) ~destination:(temp_root ())
   in
   Alcotest.(check bool) "no delete" false (List.mem "delete" fake.calls)
 
@@ -157,7 +170,7 @@ let destroy_requires_authorization () =
   let name = Declaration.name (declaration ()) in
   let request = { Destroy.name; choice = Destroy.No_backup; confirmation = None } in
   match
-    Maintenance.destroy ~smolvm ~paths ~declaration:(declaration ()) ~request
+    Maintenance.destroy ~services ~smolvm ~paths ~declaration:(declaration ()) ~request
       ~backup_destination:None
   with
   | Error _ -> Alcotest.(check bool) "not deleted" false (List.mem "delete" fake.calls)
@@ -171,7 +184,7 @@ let destroy_backs_up_first_when_asked () =
       confirmation = Some "work" }
   in
   match
-    Maintenance.destroy ~smolvm ~paths ~declaration:d ~request
+    Maintenance.destroy ~services ~smolvm ~paths ~declaration:d ~request
       ~backup_destination:(Some (temp_root ()))
   with
   | Error e -> Alcotest.failf "destroy: %s" (Ade_error.to_string e)
@@ -190,7 +203,7 @@ let destroy_deletes_when_authorized () =
       confirmation = Some "work" }
   in
   match
-    Maintenance.destroy ~smolvm ~paths ~declaration:d ~request ~backup_destination:None
+    Maintenance.destroy ~services ~smolvm ~paths ~declaration:d ~request ~backup_destination:None
   with
   | Ok _ -> Alcotest.(check string) "absent" "absent" fake.state
   | Error e -> Alcotest.failf "destroy: %s" (Ade_error.to_string e)

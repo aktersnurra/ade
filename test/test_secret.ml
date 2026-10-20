@@ -22,6 +22,7 @@ let references_parse_to_sources () =
     [
       ("keychain:ade-work-ssh", "keychain item ade-work-ssh");
       ("file:/etc/ade/key.pem", "file /etc/ade/key.pem");
+      ("pass:ade/work-ssh", "pass entry ade/work-ssh");
       (* A bare path keeps existing declarations working. *)
       ("/etc/ade/key.pem", "file /etc/ade/key.pem");
     ]
@@ -32,7 +33,8 @@ let malformed_references_are_rejected () =
       match Secret.of_reference reference with
       | Ok _ -> Alcotest.failf "expected %S to be rejected" reference
       | Error _ -> ())
-    [ ""; "keychain:"; "file:"; "vault:something" ]
+    [ ""; "keychain:"; "file:"; "vault:something"; "pass:"; "pass:-rf";
+      "pass:/etc/shadow"; "pass:ade/../../escape" ]
 
 (* Runtime guarantee: describe is the only string-returning function, and it
    cannot leak because the credential has not been read. *)

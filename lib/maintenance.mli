@@ -15,6 +15,7 @@ type restore_mode =
   | Into_new_machine of Workbench_name.t
 
 val backup :
+  services:Boot.services ->
   smolvm:Smolvm.t ->
   paths:State_paths.t ->
   declaration:Declaration.t ->
@@ -25,6 +26,7 @@ val backup :
     Herdr runtime state and installed secrets. *)
 
 val restore :
+  services:Boot.services ->
   smolvm:Smolvm.t ->
   paths:State_paths.t ->
   declaration:Declaration.t ->
@@ -33,6 +35,7 @@ val restore :
   (outcome, Ade_error.t) result
 
 val reimage :
+  services:Boot.services ->
   smolvm:Smolvm.t ->
   paths:State_paths.t ->
   declaration:Declaration.t ->
@@ -55,6 +58,7 @@ val pack :
     guest code copied into persistent storage. *)
 
 val destroy :
+  services:Boot.services ->
   smolvm:Smolvm.t ->
   paths:State_paths.t ->
   declaration:Declaration.t ->

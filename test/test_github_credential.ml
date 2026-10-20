@@ -73,11 +73,11 @@ let the_token_url_names_the_installation () =
     "https://api.github.com/app/installations/78901234/access_tokens"
     (Github_credential.token_url (config ()))
 
-let ok_post body ~url:_ ~bearer:_ = Ok (201, body)
+let ok_post body ~url:_ ~bearer:_ ~body:_ = Ok (201, body)
 
 let a_successful_exchange_yields_a_token_and_expiry () =
   let body =
-    Printf.sprintf {|{"token":"%s","expires_at":"2026-08-29T23:00:00Z"}|} fake_token
+    Printf.sprintf {|{"token":"%s","expires_at":"2026-08-29T23:00:00Z","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","metadata":"read"}}|} fake_token
   in
   match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
   | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
@@ -88,7 +88,7 @@ let a_successful_exchange_yields_a_token_and_expiry () =
 
 (* A refusal must be reported as such, not silently treated as a token. *)
 let a_refused_exchange_is_reported () =
-  let post ~url:_ ~bearer:_ = Ok (401, {|{"message":"unauthorized"}|}) in
+  let post ~url:_ ~bearer:_ ~body:_ = Ok (401, {|{"message":"unauthorized"}|}) in
   match Github_credential.exchange ~post (config ()) ~jwt:"jwt" ~now with
   | Error (Github_credential.Exchange_failed { status; _ }) ->
       Alcotest.(check int) "status" 401 status
@@ -107,13 +107,63 @@ let a_malformed_response_is_reported () =
    expiry as far away would keep a dead credential in use. *)
 let an_unreadable_expiry_falls_back_to_one_hour () =
   let body =
-    Printf.sprintf {|{"token":"%s","expires_at":"not-a-timestamp"}|} fake_token
+    Printf.sprintf {|{"token":"%s","expires_at":"not-a-timestamp","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","metadata":"read"}}|} fake_token
   in
   match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
   | Ok minted ->
       Alcotest.(check (float 1.0)) "one hour" (now +. 3600.0) minted.Provider.expires_at
   | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
 
+
+(* The scope is what the request body carries; without it GitHub grants the
+   installation's full authority. *)
+let the_request_body_carries_the_scope () =
+  let config =
+    config ~repositories:[ "owner/repo"; "owner/other" ]
+      ~permissions:[ ("contents", "write"); ("pull_requests", "read") ] ()
+  in
+  match Github_credential.request_body config with
+  | Error e -> Alcotest.failf "body: %s" (Github_credential.describe_error e)
+  | Ok body ->
+      let json = Yojson.Safe.from_string body in
+      Alcotest.(check string) "repositories by name" {|["repo","other"]|}
+        (Yojson.Safe.to_string (Yojson.Safe.Util.member "repositories" json));
+      Alcotest.(check string) "permissions" {|{"contents":"write","pull_requests":"read"}|}
+        (Yojson.Safe.to_string (Yojson.Safe.Util.member "permissions" json))
+
+let the_exchange_sends_the_scope () =
+  let sent = ref "" in
+  let post ~url:_ ~bearer:_ ~body =
+    sent := body;
+    Ok
+      ( 201,
+        Printf.sprintf
+          {|{"token":"%s","expires_at":"2026-08-29T23:00:00Z","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","metadata":"read"}}|}
+          fake_token )
+  in
+  match Github_credential.exchange ~post (config ()) ~jwt:"jwt" ~now with
+  | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
+  | Ok _ -> Alcotest.(check bool) "scoped" true (contains !sent {|"repositories":["repo"]|})
+
+(* GitHub's echo of the grant is checked, not trusted. *)
+let a_broader_grant_is_discarded granted () =
+  let body =
+    Printf.sprintf {|{"token":"%s","expires_at":"2026-08-29T23:00:00Z",%s}|} fake_token granted
+  in
+  match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
+  | Error (Github_credential.Scope_exceeded _) -> ()
+  | Error e -> Alcotest.failf "unexpected: %s" (Github_credential.describe_error e)
+  | Ok _ -> Alcotest.fail "expected the token to be discarded"
+
+let a_narrower_grant_is_accepted () =
+  let body =
+    Printf.sprintf
+      {|{"token":"%s","expires_at":"2026-08-29T23:00:00Z","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"read","metadata":"read"}}|}
+      fake_token
+  in
+  match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"jwt" ~now with
+  | Ok _ -> ()
+  | Error e -> Alcotest.failf "exchange: %s" (Github_credential.describe_error e)
 
 (* base64url, not standard base64: GitHub rejects a JWT containing '+', '/' or
    '='. Vectors from RFC 4648, plus a case that exercises the substituted
@@ -179,7 +229,7 @@ let a_signing_failure_is_reported () =
 let expiries_are_parsed_as_utc () =
   List.iter
     (fun (timestamp, expected) ->
-      let body = Printf.sprintf {|{"token":"t","expires_at":"%s"}|} timestamp in
+      let body = Printf.sprintf {|{"token":"t","expires_at":"%s","repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","metadata":"read"}}|} timestamp in
       match Github_credential.exchange ~post:(ok_post body) (config ()) ~jwt:"j" ~now with
       | Error e -> Alcotest.failf "%s: %s" timestamp (Github_credential.describe_error e)
       | Ok minted ->
@@ -199,7 +249,39 @@ let () =
           Alcotest.test_case "no permissions" `Quick a_config_without_permissions_is_refused;
           Alcotest.test_case "key reference" `Quick
             a_key_reference_is_not_resolved_at_validation;
-          Alcotest.test_case "complete" `Quick a_complete_config_is_accepted ] );
+          Alcotest.test_case "complete" `Quick a_complete_config_is_accepted;
+          Alcotest.test_case "admin level" `Quick (fun () ->
+              expect_invalid "admin"
+                (Github_credential.validate
+                   (config ~permissions:[ ("administration", "admin") ] ())));
+          Alcotest.test_case "unknown level" `Quick (fun () ->
+              expect_invalid "level"
+                (Github_credential.validate (config ~permissions:[ ("contents", "all") ] ())));
+          Alcotest.test_case "several owners" `Quick (fun () ->
+              expect_invalid "owners"
+                (Github_credential.validate
+                   (config ~repositories:[ "alice/a"; "bob/b" ] ())));
+          Alcotest.test_case "malformed repository" `Quick (fun () ->
+              expect_invalid "repository"
+                (Github_credential.validate (config ~repositories:[ "a/b/c" ] ()))) ] );
+      ( "scope",
+        [ Alcotest.test_case "request body" `Quick the_request_body_carries_the_scope;
+          Alcotest.test_case "sent" `Quick the_exchange_sends_the_scope;
+          Alcotest.test_case "narrower accepted" `Quick a_narrower_grant_is_accepted;
+          Alcotest.test_case "all repositories" `Quick
+            (a_broader_grant_is_discarded
+               {|"repository_selection":"all","repositories":[],"permissions":{"contents":"write"}|});
+          Alcotest.test_case "extra repository" `Quick
+            (a_broader_grant_is_discarded
+               {|"repository_selection":"selected","repositories":[{"name":"repo"},{"name":"secret"}],"permissions":{"contents":"write"}|});
+          Alcotest.test_case "extra permission" `Quick
+            (a_broader_grant_is_discarded
+               {|"repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"write","actions":"write"}|});
+          Alcotest.test_case "higher level" `Quick
+            (a_broader_grant_is_discarded
+               {|"repository_selection":"selected","repositories":[{"name":"repo"}],"permissions":{"contents":"admin"}|});
+          Alcotest.test_case "no scope echoed" `Quick
+            (a_broader_grant_is_discarded {|"other":1|}) ] );
       ( "request",
         [ Alcotest.test_case "jwt window" `Quick the_jwt_window_satisfies_github;
           Alcotest.test_case "token url" `Quick the_token_url_names_the_installation ] );

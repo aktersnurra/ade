@@ -64,7 +64,7 @@ let running_state_is_parsed () =
 
 (* The declaration is the only source of resources and network posture. *)
 let create_argv_follows_the_declaration () =
-  let argv = Smolvm.create_argv (load_declaration ()) in
+  let argv = Smolvm.create_argv (load_declaration ()) ~mounts:[] in
   let rec index_of needle = function
     | [] -> None
     | value :: rest -> if value = needle then Some rest else index_of needle rest
@@ -86,10 +86,35 @@ let sealed_declaration_creates_no_network () =
   match Declaration.load "../workbenches/work-offline.toml" with
   | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
   | Ok declaration ->
-      let argv = Smolvm.create_argv declaration in
+      let argv = Smolvm.create_argv declaration ~mounts:[] in
       Alcotest.(check bool) "no --net" false (List.mem "--net" argv);
       Alcotest.(check bool) "no allow-host" false (List.mem "--allow-host" argv);
       Alcotest.(check bool) "no allow-cidr" false (List.mem "--allow-cidr" argv)
+
+(* The runtime forwards an agent only into a machine created to accept one. *)
+let dedicated_ssh_requests_agent_forwarding () =
+  let argv = Smolvm.create_argv (load_declaration ()) ~mounts:[] in
+  Alcotest.(check bool) "work forwards" true (List.mem "--ssh-agent" argv);
+  match Declaration.load "../workbenches/work-offline.toml" with
+  | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check bool) "disabled does not" false
+        (List.mem "--ssh-agent" (Smolvm.create_argv declaration ~mounts:[]))
+
+(* Only resolved mounts reach the runtime, one --volume each, read-only marked. *)
+let create_argv_carries_resolved_mounts () =
+  let mounts =
+    [ { Host_mount.source = "/home/u/code/a"; guest = "/src/a"; read_only = true };
+      { Host_mount.source = "/home/u/data"; guest = "/work/data"; read_only = false } ]
+  in
+  let argv = Smolvm.create_argv (load_declaration ()) ~mounts in
+  let rec volumes = function
+    | "--volume" :: spec :: rest -> spec :: volumes rest
+    | _ :: rest -> volumes rest
+    | [] -> []
+  in
+  Alcotest.(check (list string)) "volumes"
+    [ "/home/u/code/a:/src/a:ro"; "/home/u/data:/work/data" ] (volumes argv)
 
 (* Attachment must hand over the terminal; capture would break interactivity. *)
 let attach_inherits_the_terminal () =
@@ -162,7 +187,9 @@ let () =
           Alcotest.test_case "running via json" `Quick running_state_is_parsed ] );
       ( "create",
         [ Alcotest.test_case "declaration" `Quick create_argv_follows_the_declaration;
-          Alcotest.test_case "sealed" `Quick sealed_declaration_creates_no_network ] );
+          Alcotest.test_case "sealed" `Quick sealed_declaration_creates_no_network;
+          Alcotest.test_case "mounts" `Quick create_argv_carries_resolved_mounts;
+          Alcotest.test_case "ssh agent" `Quick dedicated_ssh_requests_agent_forwarding ] );
       ( "execution",
         [ Alcotest.test_case "attach inherits" `Quick attach_inherits_the_terminal;
           Alcotest.test_case "exec captures" `Quick exec_captures_output;

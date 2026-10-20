@@ -10,9 +10,10 @@ val post :
   ?curl:string ->
   url:string ->
   bearer:string ->
+  body:string ->
   unit ->
   (int * string, string) result
-(** POST with a bearer token, returning the status and body.
+(** POST a JSON [body] with a bearer token, returning the status and body.
 
     The token is written to curl's stdin as a header rather than passed as an
     argument: anything in argv is readable from the process table by any local

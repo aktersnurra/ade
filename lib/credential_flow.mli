@@ -18,7 +18,7 @@ type rotation = {
 }
 
 val rotate_github :
-  ?http:(url:string -> bearer:string -> (int * string, string) result) ->
+  ?http:Github_credential.http_post ->
   ?runner:Process_runner.t ->
   smolvm:Smolvm.t ->
   name:Workbench_name.t ->
