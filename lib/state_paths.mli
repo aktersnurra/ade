@@ -21,6 +21,9 @@ val ssh_agent_file : t -> Workbench_name.t -> string
 (** Where the running workbench's host agent is recorded, so a later [stop] can
     find and stop it. *)
 
+val created_file : t -> Workbench_name.t -> string
+(** What the machine was created with, for drift reports. *)
+
 val credentials_dir : t -> Workbench_name.t -> string
 val workbench_dir : t -> Workbench_name.t -> string
 (** Everything ADE keeps for one workbench; removed with the workbench. *)

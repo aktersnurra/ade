@@ -6,25 +6,71 @@ let make ~services ~smolvm ~paths = { smolvm; paths; services }
 
 let ( let* ) = Result.bind
 
-(* Drift is reported, never silently repaired: ADE does not mutate a running
-   workbench to resolve a mismatch with the declaration. *)
+(* The record is one "group<TAB>value" line per pair of the creation shape.
+   It names host paths but holds nothing secret. *)
+let render_shape shape =
+  String.concat "" (List.map (fun (group, value) -> group ^ "\t" ^ value ^ "\n") shape)
+
+let parse_shape text =
+  String.split_on_char '\n' text
+  |> List.filter_map (fun line ->
+         match String.index_opt line '\t' with
+         | Some tab -> Some (String.sub line 0 tab, String.sub line (tab + 1) (String.length line - tab - 1))
+         | None -> None)
+
+let record_creation t declaration =
+  let name = Declaration.name declaration in
+  let* () = State_paths.ensure_dir (State_paths.workbench_dir t.paths name) in
+  let path = State_paths.created_file t.paths name in
+  (* Bos writes through a temporary file and renames, so a crash never leaves a
+     half-written record that would report false drift. *)
+  match
+    Bos.OS.File.write ~mode:0o600 (Fpath.v path) (render_shape (Declaration.creation_shape declaration))
+  with
+  | Ok () -> Ok ()
+  | Error (`Msg reason) -> Error (Ade_error.Operation_refused { operation = "record creation"; reason })
+
+(* Drift is reported, never silently repaired: ADE does not mutate a machine to
+   resolve a mismatch with the declaration, because what differs (mounts,
+   resources, network) is fixed at creation and changing it means recreating
+   the machine, which destroys its workspace. A machine with no record, created
+   before records existed or outside ADE, is not compared. *)
 let drift_of t declaration =
   let name = Declaration.name declaration in
   let* state = Smolvm.state t.smolvm name in
   match state with
   | Smolvm.Absent -> Ok None
-  | _ ->
-      (* V1 stores no shadow lifecycle database, so ADE compares only what
-         SmolVM itself reports. A deeper comparison would require recording
-         declaration digests per machine, which the design rules out. *)
-      Ok None
+  | _ -> (
+      match In_channel.with_open_bin (State_paths.created_file t.paths name) In_channel.input_all with
+      | exception Sys_error _ -> Ok None
+      | text ->
+          let recorded = parse_shape text in
+          let current = Declaration.creation_shape declaration in
+          let values group shape =
+            List.sort String.compare
+              (List.filter_map (fun (g, v) -> if g = group then Some v else None) shape)
+          in
+          let changed =
+            List.filter
+              (fun group -> values group recorded <> values group current)
+              [ "image"; "resources"; "network"; "ssh"; "mounts" ]
+          in
+          if changed = [] then Ok None
+          else
+            Ok
+              (Some
+                 (Printf.sprintf
+                    "%s changed since the machine was created; these apply only at \
+                     creation, so they take effect after ade rm and ade create"
+                    (String.concat ", " changed))))
 
 (* Mounts are resolved immediately before creation, on the host that will run
    the machine, so a symlink swapped after the declaration was written is
    still caught. *)
 let create_machine t declaration =
   let* mounts = Host_mount.for_declaration ~paths:t.paths declaration in
-  Smolvm.create t.smolvm declaration ~mounts
+  let* () = Smolvm.create t.smolvm declaration ~mounts in
+  record_creation t declaration
 
 let with_lock t declaration action =
   Workbench_lock.with_lock t.paths (Declaration.name declaration) action

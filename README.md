@@ -132,8 +132,12 @@ of the host path) may use only letters, digits, `.`, `_` and `-`. `/outbox` is
 backed by ADE's own state directory for the workbench and is reserved. `git`
 must be on the host's `PATH`.
 
-Mounts and `--ssh-agent` are applied when the machine is created. Adding either
-to an existing workbench takes effect after `ade rm` and `ade create`.
+Mounts, resources, the network and whether an SSH agent is forwarded are fixed
+when the machine is created; changing them takes effect after `ade rm` and
+`ade create`. ADE records what each machine was created with, so after such an
+edit `ade status` reports the drift, `start`, `attach`, `exec` and `pull` warn,
+and `create` refuses instead of claiming the machine matches. The SSH key,
+credentials and Herdr apply at every start and are not drift.
 
 ## What start does
 

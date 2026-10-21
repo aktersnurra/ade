@@ -147,6 +147,24 @@ class CliEndToEndTest(unittest.TestCase):
         self.assertNotIn("--net", argv)
         self.assertNotIn("--allow-host", argv)
 
+    def test_editing_a_creation_setting_is_reported_as_drift(self):
+        self.ade("create", "work")
+        work = self.declarations / "work.toml"
+        edited = work.read_text().replace("cpus = 6", "cpus = 2")
+        assert edited != work.read_text(), "work.toml cpus changed; update this test"
+        work.write_text(edited)
+
+        status = self.ade("status", "work")
+        self.assertEqual(status.returncode, 0, msg=status.stderr)
+        self.assertIn("drift\tresources changed", status.stdout)
+
+        started = self.ade("start", "work")
+        self.assertEqual(started.returncode, 0, msg=started.stderr)
+        self.assertIn("warning: work: resources changed", started.stderr)
+
+        again = self.ade("create", "work")
+        self.assertNotEqual(again.returncode, 0)
+
     def test_unknown_workbench_is_reported(self):
         result = self.ade("status", "does-not-exist")
         self.assertNotEqual(result.returncode, 0)

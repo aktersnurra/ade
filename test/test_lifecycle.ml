@@ -76,12 +76,14 @@ let setup initial =
   (fake, lifecycle)
 
 (* The shipped declaration without its provision line, so these tests are about
-   convergence alone; provisioning has its own group below. *)
-let declaration () =
+   convergence alone; provisioning has its own group below. [edit] rewrites
+   whole lines, for tests that change the declaration after creation. *)
+let declaration ?(edit = Fun.id) () =
   let source = In_channel.with_open_bin "../workbenches/work.toml" In_channel.input_all in
   let kept =
     String.split_on_char '\n' source
     |> List.filter (fun line -> not (String.starts_with ~prefix:"provision = " line))
+    |> List.map edit
   in
   let path = Filename.temp_file "ade-work-" ".toml" in
   Out_channel.with_open_bin path (fun channel ->
@@ -196,6 +198,84 @@ posture = "public"
   match Declaration.load path with
   | Ok declaration -> declaration
   | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+
+(* A machine keeps what it was created with: resources, network, the SSH
+   forwarding switch and mounts. Editing those afterwards is drift, reported by
+   status and create; editing what applies at every start is not. *)
+let contains text affix =
+  let n = String.length affix in
+  let rec at i = i + n <= String.length text && (String.sub text i n = affix || at (i + 1)) in
+  at 0
+
+let replace_line ~prefix ~by line = if String.starts_with ~prefix line then by else line
+
+let drift_of lifecycle declaration =
+  match Lifecycle.status lifecycle declaration with
+  | Ok status -> status.Lifecycle.drift
+  | Error error -> Alcotest.failf "status: %s" (Ade_error.to_string error)
+
+let created lifecycle declaration =
+  check_outcome "create" Lifecycle.Changed (Lifecycle.create lifecycle declaration)
+
+let unchanged_declaration_has_no_drift () =
+  let _, lifecycle = setup "absent" in
+  created lifecycle (declaration ());
+  Alcotest.(check (option string)) "drift" None (drift_of lifecycle (declaration ()))
+
+let changed_resources_are_drift () =
+  let _, lifecycle = setup "absent" in
+  created lifecycle (declaration ());
+  let edited = declaration ~edit:(replace_line ~prefix:"cpus = " ~by:"cpus = 2") () in
+  (match drift_of lifecycle edited with
+   | Some reason ->
+       if not (contains reason "resources") then
+         Alcotest.failf "drift does not name resources: %s" reason
+   | None -> Alcotest.fail "a resource change was not reported");
+  match Lifecycle.create lifecycle edited with
+  | Ok _ -> Alcotest.fail "create converged on a drifted machine"
+  | Error _ -> ()
+
+let a_new_mount_is_drift () =
+  let _, lifecycle = setup "absent" in
+  created lifecycle (declaration ());
+  let edited =
+    declaration
+      ~edit:(replace_line ~prefix:"[ssh]"
+               ~by:"[[mount]]\nhost = \"/srv/data\"\nguest = \"/data\"\n\n[ssh]")
+      ()
+  in
+  match drift_of lifecycle edited with
+  | Some reason ->
+      if not (contains reason "mounts") then
+        Alcotest.failf "drift does not name mounts: %s" reason
+  | None -> Alcotest.fail "a new mount was not reported"
+
+let start_time_settings_are_not_drift () =
+  let _, lifecycle = setup "absent" in
+  created lifecycle (declaration ());
+  let edited =
+    declaration
+      ~edit:(fun line ->
+        line
+        |> replace_line ~prefix:"herdr = " ~by:"herdr = false"
+        |> replace_line ~prefix:"key_ref = " ~by:"key_ref = \"pass:other\"")
+      ()
+  in
+  Alcotest.(check (option string)) "drift" None (drift_of lifecycle edited)
+
+(* A machine ADE has no record for, made before records existed or outside
+   ADE, cannot be compared, and is not reported as drifted. *)
+let a_machine_without_a_record_has_no_drift () =
+  let _, lifecycle = setup "stopped" in
+  Alcotest.(check (option string)) "drift" None (drift_of lifecycle (declaration ()))
+
+let removing_forgets_the_record () =
+  let _, lifecycle = setup "absent" in
+  created lifecycle (declaration ());
+  check_outcome "remove" Lifecycle.Changed (Lifecycle.remove lifecycle (declaration ()));
+  let edited = declaration ~edit:(replace_line ~prefix:"cpus = " ~by:"cpus = 2") () in
+  created lifecycle edited;
+  Alcotest.(check (option string)) "drift" None (drift_of lifecycle edited)
 
 let calls fake = List.rev fake.calls
 
@@ -348,6 +428,13 @@ let () =
       ( "remove",
         [ Alcotest.test_case "running" `Quick removing_a_running_machine_deletes_it_and_its_state;
           Alcotest.test_case "absent" `Quick removing_an_absent_machine_converges ] );
+      ( "drift",
+        [ Alcotest.test_case "unchanged" `Quick unchanged_declaration_has_no_drift;
+          Alcotest.test_case "resources" `Quick changed_resources_are_drift;
+          Alcotest.test_case "new mount" `Quick a_new_mount_is_drift;
+          Alcotest.test_case "start-time settings" `Quick start_time_settings_are_not_drift;
+          Alcotest.test_case "no record" `Quick a_machine_without_a_record_has_no_drift;
+          Alcotest.test_case "rm forgets" `Quick removing_forgets_the_record ] );
       ( "provision",
         [ Alcotest.test_case "on create" `Quick creating_provisions_once_then_stops;
           Alcotest.test_case "failure" `Quick a_failed_provision_stops_the_machine_and_reports;
