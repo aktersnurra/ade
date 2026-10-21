@@ -452,4 +452,27 @@ let canonical d =
     (List.sort (fun a b -> String.compare a.guest b.guest) d.mounts);
   Buffer.contents buffer
 
+let creation_shape d =
+  let resources = d.resources in
+  let network =
+    match d.network with
+    | Sealed -> [ "sealed" ]
+    | Public -> [ "public" ]
+    | Allowlisted { hosts; cidrs } ->
+        "allowlisted"
+        :: List.map (( ^ ) "host ") (List.sort String.compare hosts)
+        @ List.map (( ^ ) "cidr ") (List.sort String.compare cidrs)
+  in
+  let mount m =
+    Printf.sprintf "%s:%s:%s" m.host m.guest
+      (match m.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone")
+  in
+  [ ("image", image_digest d);
+    ( "resources",
+      Printf.sprintf "cpus=%d memory_mib=%d overlay_gib=%d workspace_gib=%d" resources.cpus
+        resources.memory_mib resources.overlay_gib resources.workspace_gib );
+    ("ssh", match d.ssh with Disabled -> "disabled" | Dedicated_agent _ -> "forwarded") ]
+  @ List.map (fun value -> ("network", value)) network
+  @ List.map (fun m -> ("mounts", mount m)) d.mounts
+
 let digest_hex d = Digestif.SHA256.(digest_string (canonical d) |> to_hex)

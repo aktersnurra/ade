@@ -77,6 +77,13 @@ val github_credential : t -> Otoml.t option
     the credential module owns its own schema; Declaration only decides whether
     one was given. *)
 
+val creation_shape : t -> (string * string) list
+(** What the machine is created with and keeps until it is deleted, as
+    [(group, value)] pairs: ["image"], ["resources"], ["network"], ["ssh"] (only
+    whether an agent is forwarded) and ["mounts"] (one pair per mount, as
+    written). Settings applied at every start, such as the SSH key or Herdr, are
+    left out, so changing them is not drift. *)
+
 val digest_hex : t -> string
 (** SHA-256 over a canonical rendering of the declaration.
 

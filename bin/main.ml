@@ -40,6 +40,15 @@ let with_declaration name action =
       | Ok () -> 0
       | Error error -> exit_of_error error)
 
+(* Commands that use a machine as it stands warn when it no longer matches its
+   declaration: a mount removed from the file is still mounted, and the user
+   should hear that before the agents run, not from ade status later. *)
+let warn_if_drifted lifecycle declaration =
+  match Lifecycle.status lifecycle declaration with
+  | Ok { Lifecycle.drift = Some reason; name; _ } ->
+      prerr_endline (Printf.sprintf "ade: warning: %s: %s" name reason)
+  | Ok _ | Error _ -> ()
+
 let report label = function
   | Lifecycle.Converged -> print_endline (label ^ ": already satisfied")
   | Lifecycle.Changed -> print_endline (label ^ ": done")
@@ -48,10 +57,11 @@ let name_argument =
   let open Cmdliner in
   Arg.(required & pos 0 (some string) None & info [] ~docv:"NAME" ~doc:"Workbench name")
 
-let simple_command term_name doc action =
+let simple_command ?(warn = false) term_name doc action =
   let open Cmdliner in
   let run name =
     with_declaration name (fun lifecycle declaration ->
+        if warn then warn_if_drifted lifecycle declaration;
         Result.map (report term_name) (action lifecycle declaration))
   in
   Cmd.v (Cmd.info term_name ~doc) Term.(const run $ name_argument)
@@ -85,6 +95,7 @@ let attach_command =
   in
   let run name command =
     with_declaration name (fun lifecycle declaration ->
+        warn_if_drifted lifecycle declaration;
         Lifecycle.attach lifecycle declaration ~command)
   in
   Cmd.v
@@ -102,7 +113,9 @@ let exec_command =
     match load_declaration name with
     | Error error -> exit_of_error error
     | Ok declaration -> (
-        match Lifecycle.exec (lifecycle ()) declaration command with
+        let lifecycle = lifecycle () in
+        warn_if_drifted lifecycle declaration;
+        match Lifecycle.exec lifecycle declaration command with
         | Error error -> exit_of_error error
         | Ok output ->
             print_string output.Process_runner.stdout;
@@ -125,6 +138,7 @@ let pull_command =
   in
   let run name repo =
     with_declaration name (fun lifecycle declaration ->
+        warn_if_drifted lifecycle declaration;
         Result.map
           (List.iter (fun repo ->
                Printf.printf "pull: %s -> refs/remotes/agents/*\n" repo))
@@ -176,9 +190,9 @@ let commands =
   [
     doctor_command;
     simple_command "create" "Create the workbench from its declaration" Lifecycle.create;
-    simple_command "start" "Start the workbench" Lifecycle.start;
+    simple_command ~warn:true "start" "Start the workbench" Lifecycle.start;
     simple_command "stop" "Stop the workbench" Lifecycle.stop;
-    simple_command "restart" "Restart the workbench" Lifecycle.restart;
+    simple_command ~warn:true "restart" "Restart the workbench" Lifecycle.restart;
     attach_command;
     exec_command;
     status_command;
