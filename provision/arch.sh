@@ -23,3 +23,31 @@ curl -fsSL https://claude.ai/install.sh | bash
 cat > /etc/profile.d/ade-path.sh <<'EOF'
 export PATH="$HOME/.local/bin:$PATH"
 EOF
+
+# Credentials live only in tmpfs under /run/ade/secrets and are installed by
+# ADE at every start; nothing below holds one, it only says where to look.
+#
+# git asks this helper for github.com over HTTPS and gets the active GitHub
+# App installation token. With no token installed it answers nothing, and git
+# falls back to whatever else is configured.
+install -d /usr/local/bin
+cat > /usr/local/bin/ade-git-credential <<'HELPER'
+#!/bin/sh
+[ "$1" = get ] || exit 0
+token=/run/ade/secrets/current/github
+[ -r "$token" ] || exit 0
+printf 'username=x-access-token\npassword=%s\n' "$(cat "$token")"
+HELPER
+chmod 755 /usr/local/bin/ade-git-credential
+git config --system credential.https://github.com.helper /usr/local/bin/ade-git-credential
+
+# Claude Code reads ANTHROPIC_API_KEY. Login shells get it from profile.d,
+# interactive ones (Herdr panes) from bash.bashrc.
+cat > /etc/profile.d/ade-credentials.sh <<'ENV'
+if [ -r /run/ade/secrets/anthropic ]; then
+  ANTHROPIC_API_KEY="$(cat /run/ade/secrets/anthropic)"
+  export ANTHROPIC_API_KEY
+fi
+ENV
+grep -qxF '. /etc/profile.d/ade-credentials.sh' /etc/bash.bashrc 2>/dev/null \
+  || echo '. /etc/profile.d/ade-credentials.sh' >> /etc/bash.bashrc

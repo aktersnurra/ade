@@ -16,7 +16,8 @@ are inside the trusted computing base.
 
 ## Declarations
 
-Each workbench has one host-owned declaration in `workbenches/`:
+Each workbench has one host-owned declaration in `~/.config/ade/workbenches/`;
+this repository's `workbenches/` holds the examples:
 
 | File | Network posture |
 | --- | --- |
@@ -44,6 +45,7 @@ ade exec NAME -- CMD
 ade stop NAME
 ade restart NAME
 ade status [NAME]
+ade refresh NAME    # mint the next GitHub token into a running machine
 ade provision NAME  # re-run the provision script on a stopped machine
 ade rm NAME --yes   # delete the machine and ADE's state for it
 ```
@@ -63,5 +65,6 @@ validation.
 ADE cannot prevent guest code from copying a credential into persistent state,
 so the guest disk is always treated as potentially secret-bearing.
 
-Tokens are minted at start; a restart refreshes them. If minting or validation
+Tokens are minted at start, and `ade refresh` mints the next generation into
+a running machine. If minting or validation
 fails, the working generation stays active and is not revoked.

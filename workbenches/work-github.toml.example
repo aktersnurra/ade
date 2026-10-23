@@ -97,3 +97,10 @@ repositories = [
 [credentials.github.permissions]
 contents = "write"
 pull_requests = "write"
+
+# Optional: an Anthropic API key for Claude Code in the guest. Only a reference
+# is accepted; the key is installed into guest tmpfs at every start. Without
+# it, log in to Claude Code inside the guest.
+#
+# [credentials.anthropic]
+# api_key_ref = "pass:ade/work-anthropic"

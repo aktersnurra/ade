@@ -58,13 +58,18 @@ class CliEndToEndTest(unittest.TestCase):
         wrapper.chmod(0o755)
         return wrapper
 
-    def ade(self, *args):
+    def ade(self, *args, cwd=None, declarations_env=True):
         env = dict(os.environ)
         env["ADE_SMOLVM_BIN"] = str(self.fake_runtime())
         env["ADE_STATE_ROOT"] = str(self.tmp / "state")
-        env["ADE_WORKBENCHES_DIR"] = str(self.declarations)
+        env.pop("ADE_WORKBENCHES_DIR", None)
+        if declarations_env:
+            env["ADE_WORKBENCHES_DIR"] = str(self.declarations)
+        else:
+            env["XDG_CONFIG_HOME"] = str(self.tmp / "config")
         return subprocess.run(
-            [str(ADE), *args], env=env, capture_output=True, text=True, timeout=60
+            [str(ADE), *args], env=env, capture_output=True, text=True, timeout=60,
+            cwd=cwd,
         )
 
     def machines(self):
@@ -169,6 +174,27 @@ class CliEndToEndTest(unittest.TestCase):
         result = self.ade("status", "does-not-exist")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("declaration", result.stderr)
+
+    def test_declarations_come_from_the_config_dir_not_the_cwd(self):
+        # A checkout with its own workbenches/ must not supply the policy.
+        result = self.ade("status", "work", cwd=self.tmp, declarations_env=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(self.tmp / "config" / "ade" / "workbenches"), result.stderr)
+
+        config = self.tmp / "config" / "ade"
+        config.mkdir(parents=True)
+        shutil.copytree(self.declarations, config / "workbenches")
+        shutil.copytree(self.tmp / "provision", config / "provision")
+        result = self.ade("status", "work", cwd=self.tmp, declarations_env=False)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("absent", result.stdout)
+
+    def test_refresh_of_a_stopped_workbench_is_a_no_op(self):
+        self.ade("create", "work")
+        result = self.ade("refresh", "work")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("already satisfied", result.stdout)
+        self.assertEqual(self.machines().get("work"), "stopped")
 
 
 if __name__ == "__main__":

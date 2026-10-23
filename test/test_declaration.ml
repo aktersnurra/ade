@@ -250,6 +250,23 @@ let provision_changes_the_digest () =
                ~replace:{|provision = "../provision/other.sh"|}
                (provisioned ~posture:"" ~hosts:true))))
 
+let anthropic_key_ref_is_parsed () =
+  let path =
+    write_temp (valid_toml ^ "\n[credentials.anthropic]\napi_key_ref = \"pass:ade/work-anthropic\"\n")
+  in
+  match Declaration.load path with
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check (option string)) "reference" (Some "pass:ade/work-anthropic")
+        (Declaration.anthropic_api_key_ref declaration)
+
+let anthropic_key_ref_is_optional () =
+  match Declaration.load (write_temp valid_toml) with
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check (option string)) "none" None
+        (Declaration.anthropic_api_key_ref declaration)
+
 let () =
   Alcotest.run "declaration"
     [ ( "valid",
@@ -280,6 +297,18 @@ let () =
             (rejects "workbench name"
                (replace_line ~find:{|name = "work"|} ~replace:{|name = "work bench"|}
                   valid_toml)) ] );
+      ( "anthropic",
+        [ Alcotest.test_case "parsed" `Quick anthropic_key_ref_is_parsed;
+          Alcotest.test_case "optional" `Quick anthropic_key_ref_is_optional;
+          Alcotest.test_case "value instead of reference" `Quick
+            (rejects "api_key"
+               (valid_toml ^ "\n[credentials.anthropic]\napi_key = \"sk-ant-x\"\n"));
+          Alcotest.test_case "empty" `Quick
+            (rejects "must not be empty"
+               (valid_toml ^ "\n[credentials.anthropic]\napi_key_ref = \"\"\n"));
+          Alcotest.test_case "unknown provider" `Quick
+            (rejects "openai"
+               (valid_toml ^ "\n[credentials.openai]\napi_key_ref = \"pass:x\"\n")) ] );
       ( "image and provisioning",
         [ Alcotest.test_case "tag without digest" `Quick image_without_digest_is_accepted;
           Alcotest.test_case "provision path" `Quick provision_is_relative_to_the_declaration;
