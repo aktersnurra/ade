@@ -439,7 +439,8 @@ let refresh_with ~state ~github =
       | Ok declaration -> declaration
       | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
   in
-  (Lifecycle.refresh lifecycle declaration, !installs, fake)
+  let result = Lifecycle.refresh lifecycle declaration in
+  (result, !installs, fake)
 
 let refreshing_a_running_machine_installs () =
   let result, installs, fake = refresh_with ~state:"running" ~github:true in
