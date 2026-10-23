@@ -31,8 +31,10 @@ type services = {
     contact GitHub. *)
 
 val default_services : paths:State_paths.t -> services
-(** Real ssh-agent, and GitHub App credentials when the declaration has a
-    [[credentials.github]] table. *)
+(** Real ssh-agent, a GitHub App token when the declaration has a
+    [[credentials.github]] table, and an Anthropic API key when it has
+    [[credentials.anthropic]]. Installing into a running guest that already has
+    a token adds the next generation, so the same service refreshes. *)
 
 val start :
   services:services ->

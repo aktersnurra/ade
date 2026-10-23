@@ -32,6 +32,7 @@ type t = {
   herdr_enabled : bool;
   mounts : mount list;
   github_credential : Otoml.t option;
+  anthropic_api_key_ref : string option;
 }
 
 let path d = d.path
@@ -52,6 +53,7 @@ let ssh d = d.ssh
 let herdr_enabled d = d.herdr_enabled
 let mounts d = d.mounts
 let github_credential d = d.github_credential
+let anthropic_api_key_ref d = d.anthropic_api_key_ref
 
 (* Parsing is written as a small result-returning reader over the TOML value so
    that every failure carries the declaration path and a concrete reason. *)
@@ -394,16 +396,29 @@ let parse ~path root =
   let mounts = parse_mounts (find root "mount") in
   (* The credential table is carried through unparsed: each provider module
      owns its own schema, and Declaration should not have to know them all. *)
-  let github_credential =
-    match find root "credentials" with
-    | Some table -> (
-        reject_unknown ~context:"[credentials]" table [ "github" ];
-        match find table "github" with Some github -> Some github | None -> None)
-    | None -> None
+  let credentials = find root "credentials" in
+  Option.iter
+    (fun table -> reject_unknown ~context:"[credentials]" table [ "github"; "anthropic" ])
+    credentials;
+  let credential key = Option.bind credentials (fun table -> find table key) in
+  let github_credential = credential "github" in
+  (* Only a reference is accepted: the key itself never sits in a declaration,
+     so it cannot be committed with one. *)
+  let anthropic_api_key_ref =
+    Option.map
+      (fun table ->
+        reject_unknown ~context:"[credentials.anthropic]" table [ "api_key_ref" ];
+        let reference =
+          as_string "credentials.anthropic.api_key_ref"
+            (require table "api_key_ref" "[credentials.anthropic]")
+        in
+        if reference = "" then fail "credentials.anthropic.api_key_ref must not be empty";
+        reference)
+      (credential "anthropic")
   in
   {
     path; name; image; provision; resources; network; ssh; herdr_enabled; mounts;
-    github_credential;
+    github_credential; anthropic_api_key_ref;
   }
 
 let load path =

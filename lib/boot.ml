@@ -24,20 +24,48 @@ let install_github ~smolvm ~name declaration =
           (fun error -> refused (Github_credential.describe_error error))
           (Github_credential.load_config table)
       in
-      (* The guest's tmpfs is empty after boot, so this is always the first
-         generation. *)
+      (* Right after boot tmpfs is empty and this is the first generation; on
+         a refresh of a running workbench it is the one after the active one.
+         Only the number of the previous generation is used. *)
+      let* active = Credential_installer.active_generation ~smolvm ~name in
+      let previous =
+        Option.map
+          (fun number ->
+            { Credential.number; provider = Credential.Github; expires_at = 0.0;
+              installed_at = 0.0 })
+          active
+      in
       let* _ =
         Credential_flow.rotate_github ~smolvm ~name ~config ~now:(Unix.gettimeofday ())
-          ~previous:None ()
+          ~previous ()
       in
       Ok ()
+
+(* pass returns the whole entry, trailing newline included, and a key is one
+   line; the guest reads the file verbatim, so the newline is dropped here. *)
+let install_anthropic ~smolvm ~name declaration =
+  match Declaration.anthropic_api_key_ref declaration with
+  | None -> Ok ()
+  | Some reference ->
+      let* key =
+        Result.map_error
+          (fun reason -> refused ("credentials.anthropic.api_key_ref: " ^ reason))
+          (Secret.of_reference reference)
+      in
+      Secret.with_value key ~f:(fun value ->
+          Credential_installer.install_key ~smolvm ~name ~file:"anthropic"
+            ~value:(String.trim value))
+
+let install_credentials ~smolvm ~name declaration =
+  let* () = install_github ~smolvm ~name declaration in
+  install_anthropic ~smolvm ~name declaration
 
 let default_services ~paths =
   {
     start_agent =
       (fun ~name ~mode ~identity -> Ssh_agent.start ~paths ~name ~mode ~identity ());
     stop_agent = (fun agent -> Ssh_agent.stop agent);
-    install_credentials = install_github;
+    install_credentials;
   }
 
 (* The record is three lines: socket, pid, and whether an identity is loaded.

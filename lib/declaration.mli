@@ -77,6 +77,11 @@ val github_credential : t -> Otoml.t option
     the credential module owns its own schema; Declaration only decides whether
     one was given. *)
 
+val anthropic_api_key_ref : t -> string option
+(** [[credentials.anthropic] api_key_ref], a secret reference such as
+    ["pass:ade/work-anthropic"]. The key is installed into guest tmpfs at every
+    start for Claude Code; it is never part of the declaration itself. *)
+
 val creation_shape : t -> (string * string) list
 (** What the machine is created with and keeps until it is deleted, as
     [(group, value)] pairs: ["image"], ["resources"], ["network"], ["ssh"] (only
