@@ -10,7 +10,7 @@ existence and state; ADE is the policy around it.
 ## What is here
 
 - `bin/`, `lib/` — the `ade` CLI, one small OCaml binary
-- `workbenches/` — host-owned declarations, one per workbench
+- `workbenches/` — example declarations, one per workbench
 - `provision/arch.sh` — installs the guest's tooling after creation
 - `docs/smolvm-workbenches.md` — the trust model and credential details
 - `docs/smoke-run.md` — what to check on the first real run
@@ -35,10 +35,24 @@ opam install . --deps-only --with-test
 dune build
 ```
 
+Declarations are read from `~/.config/ade/workbenches/NAME.toml`
+(`$XDG_CONFIG_HOME/ade/workbenches` when that is set; `ADE_WORKBENCHES_DIR`
+overrides both), never from the current directory: a declaration is policy, and
+running `ade` inside a checkout that ships its own `workbenches/` must not let
+that checkout choose it. Start from the examples here:
+
+```sh
+mkdir -p ~/.config/ade
+cp -r workbenches provision ~/.config/ade/
+```
+
+Copy `provision/` too: declarations name their script relative to themselves.
+
 ## Use
 
 ```sh
 ade doctor               # check SmolVM, /dev/kvm, git are in place
+ade doctor work          # ...and that work's declaration loads and its secrets are readable
 ade create work          # create from the declaration, then provision it
 ade start work           # ensure running
 ade attach work          # start if needed, then attach (Herdr, if enabled)
@@ -46,6 +60,7 @@ ade exec work -- CMD
 ade status work
 ade stop work
 ade pull work [REPO]     # bring the agents' branches back from clone mounts
+ade refresh work         # mint a fresh GitHub token into the running workbench
 ade provision work       # re-run the provision script (machine must be stopped)
 ade rm work --yes        # delete the machine, its guest disk and ADE's state
 ```
@@ -153,10 +168,36 @@ start leaves nothing running:
    declared repositories and permissions, verify GitHub granted no more, and
    install it into guest tmpfs.
 
-`ade stop` stops the VM, then its agent. Tokens are minted at start, so a
-restart refreshes them.
+4. With `[credentials.anthropic]`, install the API key into guest tmpfs.
 
-Secret references (`key_ref`, `private_key_path`) take `keychain:ITEM` (macOS
+`ade stop` stops the VM, then its agent.
+
+GitHub tokens last an hour and are minted at start. `ade refresh NAME` mints
+the next one into a running workbench without disturbing the agents, and is a
+no-op for a stopped one, so it is safe to run from cron or a launchd agent
+every half hour:
+
+```
+*/30 * * * * PATH=/usr/local/bin:/usr/bin:/bin ade refresh work
+```
+
+`smolvm` and, for `pass:` references, `pass` must be on that `PATH`;
+a `pass` entry needs a gpg-agent that is already unlocked.
+
+In the guest, `provision/arch.sh` points git at the token for
+`https://github.com` (a credential helper reading
+`/run/ade/secrets/current/github`) and exports `ANTHROPIC_API_KEY` from
+`/run/ade/secrets/anthropic` in login and interactive shells:
+
+```toml
+[credentials.anthropic]
+api_key_ref = "pass:ade/work-anthropic"   # a reference, never the key
+```
+
+Without it, log in to Claude Code inside the guest instead; that login is
+stored on the guest disk.
+
+Secret references (`key_ref`, `private_key_path`, `api_key_ref`) take `keychain:ITEM` (macOS
 Keychain), `pass:ENTRY` (password-store, the whole entry) or `file:PATH`.
 
 ## Trust model

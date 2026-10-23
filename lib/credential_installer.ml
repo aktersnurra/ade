@@ -85,3 +85,33 @@ let revoke ~smolvm ~name ~provider =
       ]
   in
   Ok ()
+
+(* The generation currently active in the guest, read from the [current]
+   link. After a boot tmpfs is empty and there is none. *)
+let active_generation ~smolvm ~name =
+  let* output =
+    Smolvm.exec smolvm name
+      [ "sh"; "-c"; Printf.sprintf "readlink %s || true" (Filename.quote current_link) ]
+  in
+  match output with
+  | { Process_runner.status = 0; stdout; _ } ->
+      let target = Filename.basename (String.trim stdout) in
+      Ok (Scanf.sscanf_opt target "generation-%d%!" Fun.id)
+  | { Process_runner.status; stderr; _ } ->
+      Error (Ade_error.Runtime_failed { argv = [ "credential lookup" ]; status; stderr })
+
+let key_argv ~file =
+  let path = Filename.concat secrets_root file in
+  [
+    "sh"; "-c";
+    Printf.sprintf "set -eu; umask 077; mkdir -p %s; cat > %s.tmp; mv -f %s.tmp %s"
+      (Filename.quote secrets_root) (Filename.quote path) (Filename.quote path)
+      (Filename.quote path);
+  ]
+
+let install_key ~smolvm ~name ~file ~value =
+  if String.length value = 0 then
+    Error
+      (Ade_error.Operation_refused
+         { operation = "install credential"; reason = "the key for " ^ file ^ " is empty" })
+  else checked (Smolvm.exec_with_stdin smolvm name (key_argv ~file) ~stdin:value)

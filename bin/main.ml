@@ -17,10 +17,20 @@ let smolvm_executable () =
   | Some path -> path
   | None -> Option.value (Process_runner.find_executable "smolvm") ~default:"smolvm"
 
+(* Declarations are policy, so they come from one fixed place in the user's
+   config, never from the current directory: running ade inside a checkout
+   that ships its own workbenches/ must not hand that checkout the policy. *)
 let declarations_dir () =
   match Sys.getenv_opt "ADE_WORKBENCHES_DIR" with
-  | Some dir -> dir
-  | None -> "workbenches"
+  | Some dir when dir <> "" -> dir
+  | Some _ | None ->
+      let config =
+        match Sys.getenv_opt "XDG_CONFIG_HOME" with
+        | Some base when base <> "" -> base
+        | Some _ | None ->
+            Filename.concat (Option.value (Sys.getenv_opt "HOME") ~default:"/") ".config"
+      in
+      Filename.concat (Filename.concat config "ade") "workbenches"
 
 let load_declaration name =
   Declaration.load (Filename.concat (declarations_dir ()) (name ^ ".toml"))
@@ -173,18 +183,60 @@ let doctor_command =
     try Unix.access "/dev/kvm" [ Unix.R_OK; Unix.W_OK ]; true
     with Unix.Unix_error _ -> false
   in
-  let run () =
-    let checks =
+  (* Every secret reference the declaration would read at start. *)
+  let references declaration =
+    let ssh =
+      match Declaration.ssh declaration with
+      | Declaration.Disabled -> []
+      | Declaration.Dedicated_agent { key_ref } -> [ ("ssh key", Secret.of_reference key_ref) ]
+    in
+    let github =
+      match Declaration.github_credential declaration with
+      | None -> []
+      | Some table -> (
+          match Github_credential.load_config table with
+          | Ok config -> [ ("github key", Ok config.Github_credential.private_key) ]
+          | Error error -> [ ("github key", Error (Github_credential.describe_error error)) ])
+    in
+    let anthropic =
+      match Declaration.anthropic_api_key_ref declaration with
+      | None -> []
+      | Some reference -> [ ("anthropic", Secret.of_reference reference) ]
+    in
+    ssh @ github @ anthropic
+  in
+  let name =
+    Arg.(value & pos 0 (some string) None & info [] ~docv:"NAME"
+           ~doc:"Also check this workbench's declaration and that its secrets are readable.")
+  in
+  let run name =
+    let host =
       Doctor.run ~runner:Process_runner.run
         ~find_executable:Process_runner.find_executable
         ~smolvm:(smolvm_executable ()) ~kvm_usable
     in
+    let workbench =
+      match name with
+      | None -> []
+      | Some name -> (
+          match load_declaration name with
+          | Error error ->
+              [ { Doctor.name = "declaration"; verdict = Doctor.Fail;
+                  detail = Ade_error.to_string error } ]
+          | Ok declaration ->
+              { Doctor.name = "declaration"; verdict = Doctor.Pass;
+                detail = Declaration.path declaration }
+              :: Doctor.secret_checks
+                   ~read:(fun secret -> Secret.with_value secret ~f:(fun _ -> Ok ()))
+                   (references declaration))
+    in
+    let checks = host @ workbench in
     List.iter (fun check -> print_endline (Doctor.render check)) checks;
     if Doctor.healthy checks then 0 else 1
   in
   Cmd.v
-    (Cmd.info "doctor" ~doc:"Check the host has what ADE needs")
-    Term.(const run $ const ())
+    (Cmd.info "doctor" ~doc:"Check the host, and optionally a workbench, have what ADE needs")
+    Term.(const run $ name)
 
 let commands =
   [
@@ -193,6 +245,8 @@ let commands =
     simple_command ~warn:true "start" "Start the workbench" Lifecycle.start;
     simple_command "stop" "Stop the workbench" Lifecycle.stop;
     simple_command ~warn:true "restart" "Restart the workbench" Lifecycle.restart;
+    simple_command "refresh" "Mint a fresh GitHub token into the running workbench"
+      Lifecycle.refresh;
     attach_command;
     exec_command;
     status_command;

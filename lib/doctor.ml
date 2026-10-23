@@ -62,6 +62,21 @@ let run ~runner ~find_executable ~smolvm ~kvm_usable =
       ~why:"needed for pass: secret references on Linux";
   ]
 
+(* Reading a secret is the only way to know a reference works: a keychain:
+   reference on Linux, a missing pass entry or a moved key file all parse
+   fine and fail at start. The value goes nowhere; only success is kept. *)
+let secret_checks ~read references =
+  List.map
+    (fun (label, reference) ->
+      match reference with
+      | Error reason -> { name = label; verdict = Fail; detail = reason }
+      | Ok secret -> (
+          match read secret with
+          | Ok () -> { name = label; verdict = Pass; detail = Secret.describe secret }
+          | Error error ->
+              { name = label; verdict = Fail; detail = Ade_error.to_string error }))
+    references
+
 let healthy checks = List.for_all (fun check -> check.verdict <> Fail) checks
 
 let render check =

@@ -16,6 +16,14 @@ val run :
 (** [smolvm] is the executable ADE will use. [kvm_usable] is only consulted on
     Linux; macOS needs no KVM. *)
 
+val secret_checks :
+  read:(Secret.t -> (unit, Ade_error.t) result) ->
+  (string * (Secret.t, string) result) list ->
+  check list
+(** One check per [(label, reference)] of a declaration: the reference must
+    parse and [read] must succeed. The value is never kept or shown, only the
+    reference's {!Secret.describe}. *)
+
 val healthy : check list -> bool
 (** No required check failed; missing optional tools do not count. *)
 

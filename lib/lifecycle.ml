@@ -203,6 +203,19 @@ let provision t declaration =
               let* () = run_provision t declaration script in
               Ok Changed))
 
+(* Tokens last an hour and are minted at start; this mints the next
+   generation into a running workbench without restarting the agents. A
+   stopped workbench has nothing to refresh: its next start mints anew. *)
+let refresh t declaration =
+  with_lock t declaration (fun () ->
+      let name = Declaration.name declaration in
+      let* state = Smolvm.state t.smolvm name in
+      match state with
+      | Smolvm.Running when Declaration.github_credential declaration <> None ->
+          let* () = t.services.install_credentials ~smolvm:t.smolvm ~name declaration in
+          Ok Changed
+      | Smolvm.Running | Smolvm.Created | Smolvm.Stopped | Smolvm.Absent -> Ok Converged)
+
 let pull t declaration ~repo =
   let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
   match Process_runner.find_executable "git" with

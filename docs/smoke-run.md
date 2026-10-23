@@ -10,8 +10,10 @@ ade doctor          # every line ok or warn; fix any FAIL first
 
 ## 1. A bare workbench
 
-Copy `workbenches/work-offline.toml.example` (or any declaration) to
-`workbenches/smoke.toml`. Remove `[ssh]` and `[credentials.github]`, so no key
+Copy `workbenches/work-offline.toml` (or any declaration) to
+`~/.config/ade/workbenches/smoke.toml`, with `provision/` next to that
+directory if you keep the provision line. Run `ade doctor smoke` once it is in
+place. Remove `[ssh]` and `[credentials.github]`, so no key
 or token is involved, and add a clone mount of a throwaway repository:
 
 ```toml
