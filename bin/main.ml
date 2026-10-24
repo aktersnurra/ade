@@ -277,9 +277,9 @@ let net_command =
                         (if entry.attempts = 1 then "" else "s")
                         (clock entry.last_attempt);
                       (match entry.verdict with
-                       | Some (verdict, reason) ->
-                           Printf.printf "  classifier: %s: %s\n" (Egress.verdict_to_string verdict) reason
-                       | None -> ());
+                       | Some (Egress.Deny, reason) -> Printf.printf "  denied by the classifier: %s\n" reason
+                       | Some (_, "") | None -> ()
+                       | Some (_, reason) -> Printf.printf "  needs you: %s\n" reason);
                       Printf.printf "  allow with: ade net allow %s %s [--always]\n" name
                         (allow_argument entry.target))
                     entries)
@@ -312,6 +312,27 @@ let net_command =
       (Cmd.info "allow" ~doc:"Allow a host through the workbench's egress proxy")
       Term.(const run $ name_argument $ host $ always)
   in
+  let revoke =
+    let host =
+      Arg.(required & pos 1 (some string) None & info [] ~docv:"HOST"
+             ~doc:"The host to take back.")
+    in
+    let run name host =
+      with_net name (fun paths declaration ->
+          Result.map
+            (fun still_declared ->
+              Printf.printf "revoked %s until %s next starts\n" host name;
+              if still_declared then
+                Printf.printf
+                  "note: %s is listed in %s or %s, so it stays allowed; remove it there\n" host
+                  (Declaration.path declaration) (Net.allow_file declaration))
+            (Net.revoke ~paths declaration ~host))
+    in
+    Cmd.v
+      (Cmd.info "revoke"
+         ~doc:"Take back a host allowed this session, by you or the classifier")
+      Term.(const run $ name_argument $ host)
+  in
   let log =
     let count =
       Arg.(value & opt int 50 & info [ "n" ] ~docv:"N" ~doc:"Show the last N entries.")
@@ -330,8 +351,12 @@ let net_command =
                           (if allowed then "allow" else "BLOCK")
                           (Egress.render_target target)
                     | Egress.Classified { time; host; verdict; reason } ->
-                        Printf.printf "%s  note   %s  %s: %s\n" (clock time) host
-                          (Egress.verdict_to_string verdict) reason)
+                        Printf.printf "%s  %-5s  %s  %s\n" (clock time)
+                          (match verdict with
+                           | Egress.Allow -> "auto"
+                           | Egress.Deny -> "deny"
+                           | Egress.Ask | Egress.Unavailable -> "ask")
+                          host reason)
                 events)
             (Net.log ~paths declaration))
     in
@@ -355,7 +380,7 @@ let net_command =
   in
   Cmd.group
     (Cmd.info "net" ~doc:"Egress for proxied workbenches: blocked requests and approvals")
-    [ pending; allow; log; serve ]
+    [ pending; allow; revoke; log; serve ]
 
 let commands =
   [

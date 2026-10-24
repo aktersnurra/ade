@@ -36,13 +36,23 @@ val header_end : string -> int option
 
 val parse_request : string -> (request, string) result
 
-val blocked_response : workbench:string -> target -> string
-(** A complete 403 response telling the agent how the user can allow it. *)
+val unusual_shape : target -> string option
+(** Why a name looks built to carry data (a raw address, punycode, a very
+    long label, many labels), if it does. Such names are never decided by the
+    classifier. *)
+
+val blocked_response : ?reason:string -> workbench:string -> target -> string
+(** A complete 403 response telling the agent why, and how the user can allow
+    it. *)
 
 val sanitize : ?limit:int -> string -> string
 (** Printable ASCII only, trimmed and capped, for anything shown on the host. *)
 
-type verdict = Routine | Suspicious | Unavailable
+type verdict =
+  | Allow  (** let through for the rest of the session *)
+  | Ask  (** refuse until the user allows it *)
+  | Deny  (** refuse, with the classifier's reason *)
+  | Unavailable  (** no usable answer; treated as [Ask] *)
 
 val verdict_to_string : verdict -> string
 

@@ -54,7 +54,11 @@ let proxy ~upstream_port =
       Egress_proxy.workbench = "work";
       policy = (fun () -> patterns);
       record = (fun event -> Mutex.protect lock (fun () -> events := event :: !events));
-      refused = (fun target -> Mutex.protect lock (fun () -> refusals := target :: !refusals));
+      decide =
+        (fun target ->
+          Mutex.protect lock (fun () -> refusals := target :: !refusals);
+          if target.Egress.host = "auto.test" then Egress_proxy.Pass
+          else Egress_proxy.Refuse (Some "the classifier denied it"));
       resolve =
         (fun _ -> Ok [ Unix.ADDR_INET (Unix.inet_addr_loopback, upstream_port) ]);
     }
@@ -108,6 +112,20 @@ let refuses_and_reports_others () =
   Alcotest.(check bool) "logged as refused" true
     (List.exists (function Egress.Decision { allowed = false; _ } -> true | _ -> false) (events ()))
 
+(* What decide passes goes through as if a pattern had allowed it. *)
+let a_decided_pass_tunnels () =
+  let upstream_port, _ = upstream () in
+  let port, _, _ = proxy ~upstream_port in
+  let response = exchange port "CONNECT auto.test:443 HTTP/1.1\r\n\r\nhi" in
+  Alcotest.(check bool) "established" true (starts_with "HTTP/1.1 200" response);
+  Alcotest.(check bool) "tunnelled" true (contains "echo:hi" response)
+
+let a_refusal_carries_its_reason () =
+  let upstream_port, _ = upstream () in
+  let port, _, _ = proxy ~upstream_port in
+  let response = exchange port "CONNECT other.test:443 HTTP/1.1\r\n\r\n" in
+  Alcotest.(check bool) "reason" true (contains "the classifier denied it" response)
+
 let forwards_plain_http_rewritten () =
   let upstream_port, received = upstream () in
   let port, _, _ = proxy ~upstream_port in
@@ -133,4 +151,6 @@ let () =
         [ Alcotest.test_case "connect" `Quick tunnels_an_allowed_connect;
           Alcotest.test_case "refused" `Quick refuses_and_reports_others;
           Alcotest.test_case "plain http" `Quick forwards_plain_http_rewritten;
+          Alcotest.test_case "decided pass" `Quick a_decided_pass_tunnels;
+          Alcotest.test_case "refusal reason" `Quick a_refusal_carries_its_reason;
           Alcotest.test_case "local addresses" `Quick local_addresses_are_refused ] ) ]

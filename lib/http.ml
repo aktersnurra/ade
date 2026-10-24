@@ -1,7 +1,7 @@
 let github_headers =
   [ "Accept: application/vnd.github+json"; "X-GitHub-Api-Version: 2022-11-28" ]
 
-let post ?runner ?(curl = "/usr/bin/curl") ?(headers = github_headers) ~url ~bearer ~body () =
+let post ?runner ?(curl = "/usr/bin/curl") ?(headers = github_headers) ?(timeout = 30) ~url ~bearer ~body () =
   let runner = match runner with Some r -> r | None -> Process_runner.run in
   (* The bearer token goes in via @- (stdin) rather than -H on the command
      line, so it never appears in argv where another local process could read
@@ -16,7 +16,7 @@ let post ?runner ?(curl = "/usr/bin/curl") ?(headers = github_headers) ~url ~bea
         [
           "--silent"; "--show-error";
           "--request"; "POST";
-          "--max-time"; "30";
+          "--max-time"; string_of_int timeout;
         ]
         @ List.concat_map (fun header -> [ "--header"; header ]) headers
         @ [
