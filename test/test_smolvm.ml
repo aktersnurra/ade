@@ -91,6 +91,23 @@ let sealed_declaration_creates_no_network () =
       Alcotest.(check bool) "no allow-host" false (List.mem "--allow-host" argv);
       Alcotest.(check bool) "no allow-cidr" false (List.mem "--allow-cidr" argv)
 
+(* A proxied machine may reach its proxy and nothing else; the hosts are the
+   proxy's business and never reach the runtime. *)
+let proxied_declaration_reaches_only_its_proxy () =
+  match Declaration.load "../workbenches/work-proxied.toml.example" with
+  | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      let argv = Smolvm.create_argv declaration ~mounts:[] in
+      Alcotest.(check bool) "--net" true (List.mem "--net" argv);
+      Alcotest.(check bool) "no allow-host" false (List.mem "--allow-host" argv);
+      Alcotest.(check (list string)) "one cidr" [ "127.0.0.1/32" ]
+        (let rec cidrs = function
+           | "--allow-cidr" :: cidr :: rest -> cidr :: cidrs rest
+           | _ :: rest -> cidrs rest
+           | [] -> []
+         in
+         cidrs argv)
+
 (* The runtime forwards an agent only into a machine created to accept one. *)
 let dedicated_ssh_requests_agent_forwarding () =
   let argv = Smolvm.create_argv (load_declaration ()) ~mounts:[] in
@@ -235,6 +252,7 @@ let () =
       ( "create",
         [ Alcotest.test_case "declaration" `Quick create_argv_follows_the_declaration;
           Alcotest.test_case "sealed" `Quick sealed_declaration_creates_no_network;
+          Alcotest.test_case "proxied" `Quick proxied_declaration_reaches_only_its_proxy;
           Alcotest.test_case "mounts" `Quick create_argv_carries_resolved_mounts;
           Alcotest.test_case "ssh agent" `Quick dedicated_ssh_requests_agent_forwarding ] );
       ( "execution",

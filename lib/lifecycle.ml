@@ -82,6 +82,13 @@ let read_file path =
   with Sys_error reason ->
     Error (Ade_error.Declaration_invalid { path; reason })
 
+(* A command run directly reads no shell profile, so a proxied guest's proxy
+   is passed to it explicitly. *)
+let with_proxy_environment declaration command =
+  match Net.environment declaration with
+  | [] -> command
+  | environment -> ("env" :: List.map (fun (key, value) -> key ^ "=" ^ value) environment) @ command
+
 (* The script runs under a Maintenance boot: the guest is installing software
    from the network, so it holds neither the SSH identity nor credentials. The
    machine is stopped whether or not the script succeeded, so a failure never
@@ -94,7 +101,9 @@ let run_provision t declaration script =
       ~purpose:Boot.Maintenance declaration
   in
   let ran =
-    match Smolvm.exec_with_stdin t.smolvm name [ "bash"; "-s" ] ~stdin:source with
+    (* bash -s reads no profile, so a proxied guest is told its proxy here. *)
+    let argv = with_proxy_environment declaration [ "bash"; "-s" ] in
+    match Smolvm.exec_with_stdin t.smolvm name argv ~stdin:source with
     | Error _ as error -> error
     | Ok { Process_runner.status = 0; _ } -> Ok ()
     | Ok { Process_runner.status; stderr; _ } ->
@@ -143,7 +152,10 @@ let ensure_running t declaration =
   let name = Declaration.name declaration in
   let* state = Smolvm.state t.smolvm name in
   match state with
-  | Smolvm.Running -> Ok Converged
+  | Smolvm.Running ->
+      (* A running machine whose proxy died has no network at all. *)
+      let* () = t.services.ensure_proxy declaration in
+      Ok Converged
   | Smolvm.Created | Smolvm.Stopped ->
       let* () = boot t declaration in
       Ok Changed
@@ -162,7 +174,7 @@ let stop t declaration =
       | Smolvm.Stopped | Smolvm.Created | Smolvm.Absent ->
           (* The machine may have stopped without ADE; its agent must not
              outlive it. *)
-          let* () = Boot.release_agent ~services:t.services ~paths:t.paths name in
+          let* () = Boot.release ~services:t.services ~paths:t.paths name in
           Ok Converged
       | Smolvm.Running ->
           let* () = halt t name in
@@ -232,7 +244,7 @@ let remove t declaration =
       let* () =
         match state with Smolvm.Absent -> Ok () | _ -> Smolvm.delete t.smolvm name
       in
-      let* () = Boot.release_agent ~services:t.services ~paths:t.paths name in
+      let* () = Boot.release ~services:t.services ~paths:t.paths name in
       let dir = State_paths.workbench_dir t.paths name in
       match Bos.OS.Dir.delete ~recurse:true (Fpath.v dir) with
       | Error (`Msg reason) ->
@@ -255,7 +267,7 @@ let attach t declaration ~command =
 
 let exec t declaration command =
   let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
-  Smolvm.exec t.smolvm (Declaration.name declaration) command
+  Smolvm.exec t.smolvm (Declaration.name declaration) (with_proxy_environment declaration command)
 
 type status = { name : string; state : Smolvm.state; drift : string option }
 

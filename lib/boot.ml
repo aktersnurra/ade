@@ -9,6 +9,9 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
+  start_proxy : Declaration.t -> (unit, Ade_error.t) result;
+  ensure_proxy : Declaration.t -> (unit, Ade_error.t) result;
+  stop_proxy : Workbench_name.t -> (unit, Ade_error.t) result;
 }
 
 let ( let* ) = Result.bind
@@ -66,6 +69,9 @@ let default_services ~paths =
       (fun ~name ~mode ~identity -> Ssh_agent.start ~paths ~name ~mode ~identity ());
     stop_agent = (fun agent -> Ssh_agent.stop agent);
     install_credentials;
+    start_proxy = (fun declaration -> Net.start ~paths declaration);
+    ensure_proxy = (fun declaration -> Net.ensure ~paths declaration);
+    stop_proxy = (fun name -> Net.stop ~paths name);
   }
 
 (* The record is three lines: socket, pid, and whether an identity is loaded.
@@ -134,30 +140,47 @@ let start_agent ~services ~paths ~name ~purpose declaration =
            ignore (services.stop_agent agent);
            Error error)
 
+(* Everything ADE runs on the host for a workbench, released together. *)
+let release ~services ~paths name =
+  let agent = release_agent ~services ~paths name in
+  let proxy = services.stop_proxy name in
+  let* () = agent in
+  proxy
+
 let start ~services ~smolvm ~paths ~name ~purpose declaration =
   (* A leftover agent from a run that died is stopped, never reused: it may
      hold an identity this start should not have. *)
-  let* () = release_agent ~services ~paths name in
+  let* () = release ~services ~paths name in
   let* agent = start_agent ~services ~paths ~name ~purpose declaration in
-  let undo_agent () = ignore (release_agent ~services ~paths name) in
-  let ssh_auth_sock = Option.map Ssh_agent.socket_path agent in
-  match Smolvm.start ?ssh_auth_sock smolvm name with
+  let undo () = ignore (release ~services ~paths name) in
+  (* The proxy is up before the machine boots, so the guest is never running
+     without the only route it is allowed to use; provisioning needs it too. *)
+  match services.start_proxy declaration with
   | Error error ->
-      undo_agent ();
+      undo ();
       Error error
   | Ok () -> (
-      match purpose with
-      | Maintenance -> Ok ()
-      | Work -> (
-          match services.install_credentials ~smolvm ~name declaration with
+      let ssh_auth_sock = Option.map Ssh_agent.socket_path agent in
+      match Smolvm.start ?ssh_auth_sock smolvm name with
+      | Error error ->
+          undo ();
+          Error error
+      | Ok () -> (
+          let configured =
+            let* () = Net.configure_guest ~smolvm ~name declaration in
+            match purpose with
+            | Maintenance -> Ok ()
+            | Work -> services.install_credentials ~smolvm ~name declaration
+          in
+          match configured with
           | Ok () -> Ok ()
           | Error error ->
               (* A workbench without its declared credentials is not what was
                  asked for; leave it stopped so a retry starts from scratch. *)
               ignore (Smolvm.stop smolvm name);
-              undo_agent ();
+              undo ();
               Error error))
 
 let stop ~services ~smolvm ~paths name =
   let* () = Smolvm.stop smolvm name in
-  release_agent ~services ~paths name
+  release ~services ~paths name
