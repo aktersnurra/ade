@@ -78,6 +78,26 @@ let blocked_response_explains () =
   in
   Alcotest.(check bool) "tells the command" true (contains "ade net allow work example.com")
 
+let unusual_shapes () =
+  let shaped host = Egress.unusual_shape (target host 443) <> None in
+  List.iter (fun h -> Alcotest.(check bool) h true (shaped h))
+    [ "1.1.1.1"; "xn--ggle-0nda.com"; String.make 41 'a' ^ ".example.com"; "a.b.c.d.e.f.g.com" ];
+  List.iter (fun h -> Alcotest.(check bool) h false (shaped h))
+    [ "registry.npmjs.org"; "objects.githubusercontent.com"; "1password.com"; "a.b.c.d.e.com" ]
+
+let blocked_response_gives_the_reason () =
+  let response =
+    Egress.blocked_response ~reason:"the classifier denied it\027[2J" ~workbench:"work"
+      (target "x.com" 443)
+  in
+  let contains needle =
+    let n = String.length needle and h = String.length response in
+    let rec scan i = i + n <= h && (String.sub response i n = needle || scan (i + 1)) in
+    scan 0
+  in
+  Alcotest.(check bool) "reason" true (contains "the classifier denied it");
+  Alcotest.(check bool) "no escape" false (String.contains response '\027')
+
 let sanitize_strips_control () =
   Alcotest.(check string) "escapes" "a [2J b" (Egress.sanitize "a\027[2J\nb");
   Alcotest.(check string) "cap" "abc..." (Egress.sanitize ~limit:3 "abcdef")
@@ -85,7 +105,7 @@ let sanitize_strips_control () =
 let log_round_trips () =
   let events =
     [ Egress.Decision { time = 1.0; target = target "a.com" 443; allowed = false };
-      Egress.Classified { time = 2.0; host = "a.com"; verdict = Egress.Routine; reason = "fine" } ]
+      Egress.Classified { time = 2.0; host = "a.com"; verdict = Egress.Allow; reason = "fine" } ]
   in
   let text = String.concat "" (List.map Egress.event_to_line events) ^ "{\"torn" in
   Alcotest.(check int) "both back, torn line skipped" 2 (List.length (Egress.events_of_text text))
@@ -100,14 +120,14 @@ let pending_tracks_refusals () =
   let d time host allowed = Egress.Decision { time; target = target host 443; allowed } in
   let events =
     [ d 1.0 "a.com" false; d 2.0 "b.com" false; d 3.0 "a.com" false; d 4.0 "c.com" true;
-      Egress.Classified { time = 5.0; host = "a.com"; verdict = Egress.Suspicious; reason = "odd" } ]
+      Egress.Classified { time = 5.0; host = "a.com"; verdict = Egress.Deny; reason = "odd" } ]
   in
   let allowed (t : Egress.target) = t.host = "b.com" in
   match Egress.pending ~allowed events with
   | [ entry ] ->
       Alcotest.(check string) "host" "a.com" entry.target.host;
       Alcotest.(check int) "attempts" 2 entry.attempts;
-      Alcotest.(check bool) "verdict" true (entry.verdict = Some (Egress.Suspicious, "odd"))
+      Alcotest.(check bool) "verdict" true (entry.verdict = Some (Egress.Deny, "odd"))
   | entries -> Alcotest.failf "expected one pending entry, got %d" (List.length entries)
 
 let classifier_config =
@@ -131,17 +151,18 @@ let reply content =
 
 let classifier_parses_answers () =
   let verdict body = fst (Egress_classifier.parse_response body) in
-  Alcotest.(check bool) "routine" true
-    (verdict (reply {|{"verdict":"routine","reason":"Yarn registry"}|}) = Egress.Routine);
-  Alcotest.(check bool) "fenced" true
-    (verdict (reply "```json\n{\"verdict\":\"suspicious\",\"reason\":\"x\"}\n```") = Egress.Suspicious);
+  Alcotest.(check bool) "allow" true
+    (verdict (reply {|{"verdict":"allow","reason":"Yarn registry"}|}) = Egress.Allow);
+  Alcotest.(check bool) "ask" true (verdict (reply {|{"verdict":"ask","reason":"?"}|}) = Egress.Ask);
+  Alcotest.(check bool) "fenced deny" true
+    (verdict (reply "```json\n{\"verdict\":\"deny\",\"reason\":\"x\"}\n```") = Egress.Deny);
   Alcotest.(check bool) "unknown verdict" true
-    (verdict (reply {|{"verdict":"allow"}|}) = Egress.Unavailable);
+    (verdict (reply {|{"verdict":"yes"}|}) = Egress.Unavailable);
   Alcotest.(check bool) "prose" true (verdict (reply "sure, looks fine") = Egress.Unavailable);
   Alcotest.(check bool) "error" true
     (verdict {|{"error":{"message":"no such model"}}|} = Egress.Unavailable);
   Alcotest.(check string) "reason sanitized" "a [31m b"
-    (snd (Egress_classifier.parse_response (reply "{\"verdict\":\"routine\",\"reason\":\"a\u{1b}[31m b\"}")))
+    (snd (Egress_classifier.parse_response (reply "{\"verdict\":\"allow\",\"reason\":\"a\u{1b}[31m b\"}")))
 
 let classifier_failures_are_unavailable () =
   let config = { classifier_config with api_key = Secret.file ~path:"/dev/null" } in
@@ -154,8 +175,8 @@ let classifier_failures_are_unavailable () =
   Alcotest.(check bool) "status" true
     (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (500, "")) = Egress.Unavailable);
   Alcotest.(check bool) "ok" true
-    (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (200, reply {|{"verdict":"routine","reason":"r"}|}))
-     = Egress.Routine)
+    (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (200, reply {|{"verdict":"allow","reason":"r"}|}))
+     = Egress.Allow)
 
 let () =
   Alcotest.run "egress"
@@ -167,6 +188,8 @@ let () =
           Alcotest.test_case "plain http" `Quick rewrites_plain_http;
           Alcotest.test_case "others" `Quick refuses_other_requests;
           Alcotest.test_case "blocked response" `Quick blocked_response_explains;
+          Alcotest.test_case "blocked reason" `Quick blocked_response_gives_the_reason;
+          Alcotest.test_case "unusual shapes" `Quick unusual_shapes;
           Alcotest.test_case "sanitize" `Quick sanitize_strips_control ] );
       ( "log",
         [ Alcotest.test_case "round trip" `Quick log_round_trips;

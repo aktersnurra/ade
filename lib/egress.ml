@@ -130,19 +130,6 @@ let parse_request head =
               Ok (Forward { target; head }))
       | _ -> Error "only CONNECT and absolute http:// requests are proxied")
 
-let blocked_response ~workbench target =
-  let body =
-    Printf.sprintf
-      "ade: %s is not on the allowlist of workbench %s.\n\
-       Nothing in this machine can allow it. Ask the user to run, on the host:\n\
-      \  ade net allow %s %s\n"
-      (render_target target) workbench workbench target.host
-  in
-  Printf.sprintf
-    "HTTP/1.1 403 Blocked by ade\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\
-     Connection: close\r\n\r\n%s"
-    (String.length body) body
-
 (* Model output and anything else shown in a terminal is reduced to printable
    ASCII: a reply crafted to carry escape sequences must not be able to rewrite
    what the user sees next to the prompt to allow a host. *)
@@ -151,16 +138,49 @@ let sanitize ?(limit = 200) text =
   let trimmed = String.trim printable in
   if String.length trimmed > limit then String.sub trimmed 0 limit ^ "..." else trimmed
 
-type verdict = Routine | Suspicious | Unavailable
+(* Names built to carry data rather than to name a service: a raw address,
+   punycode that can imitate a familiar name, a label long enough to hold an
+   encoded payload, or a deep stack of labels. These go to the user without
+   consulting the classifier, so no wording of the name can talk its way
+   through. *)
+let unusual_shape target =
+  let labels = String.split_on_char '.' target.host in
+  if List.for_all (fun label -> label <> "" && String.for_all (function '0' .. '9' -> true | _ -> false) label) labels
+  then Some "a raw IP address"
+  else if List.exists (String.starts_with ~prefix:"xn--") labels then Some "an internationalized (punycode) name"
+  else if List.exists (fun label -> String.length label > 40) labels then Some "an unusually long label"
+  else if List.length labels > 6 then Some "an unusually deep name"
+  else None
+
+let blocked_response ?reason ~workbench target =
+  let why =
+    match reason with
+    | Some reason -> Printf.sprintf "ade blocked %s: %s.\n" (render_target target) (sanitize reason)
+    | None -> Printf.sprintf "ade: %s is not allowed in workbench %s.\n" (render_target target) workbench
+  in
+  let body =
+    Printf.sprintf
+      "%sNothing in this machine can allow it. Ask the user to run, on the host:\n\
+      \  ade net allow %s %s\n"
+      why workbench target.host
+  in
+  Printf.sprintf
+    "HTTP/1.1 403 Blocked by ade\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\
+     Connection: close\r\n\r\n%s"
+    (String.length body) body
+
+type verdict = Allow | Ask | Deny | Unavailable
 
 let verdict_to_string = function
-  | Routine -> "routine"
-  | Suspicious -> "suspicious"
+  | Allow -> "allow"
+  | Ask -> "ask"
+  | Deny -> "deny"
   | Unavailable -> "unavailable"
 
 let verdict_of_string = function
-  | "routine" -> Some Routine
-  | "suspicious" -> Some Suspicious
+  | "allow" -> Some Allow
+  | "ask" -> Some Ask
+  | "deny" -> Some Deny
   | "unavailable" -> Some Unavailable
   | _ -> None
 

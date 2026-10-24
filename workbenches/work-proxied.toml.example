@@ -1,8 +1,9 @@
 # Example: a workbench whose only route out is ADE's egress proxy.
 #
 # Copy to work-proxied.toml. The machine may reach only network.proxy; the
-# proxy, on the host, lets through the hosts below and refuses everything else
-# with a 403 explaining how to allow it. Approve a refused host on the host:
+# proxy, on the host, lets through the hosts below, puts anything else to the
+# classifier, and refuses what it does not allow with a 403 explaining how to
+# allow it. Approve a refused host on the host:
 #
 #   ade net pending work-proxied
 #   ade net allow work-proxied registry.yarnpkg.com            # until next start
@@ -46,10 +47,12 @@ hosts = [
   "api.anthropic.com",
 ]
 
-# Optional: a model that annotates refused requests in ade net pending. It
-# never allows anything. It sees the refused host and this allowlist, which
-# leave the host for OpenRouter, so leave it out where host names are
-# confidential.
+# Optional: a model that decides hosts not listed here: allow (for the rest of
+# the session), ask (refused until you allow it) or deny. Without it, every
+# unlisted host is refused until you allow it. It sees the requested host and
+# this allowlist, which leave the host for OpenRouter, so leave it out where
+# host names are confidential. ade net log shows what it allowed; ade net
+# revoke takes an allow back.
 [network.classifier]
 model = "typesafe/jev-1.14"
 api_key_ref = "pass:ade/openrouter"

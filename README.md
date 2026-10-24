@@ -63,7 +63,8 @@ ade pull work [REPO]     # bring the agents' branches back from clone mounts
 ade refresh work         # mint a fresh GitHub token into the running workbench
 ade net pending work     # requests a proxied workbench's proxy refused
 ade net allow work HOST  # let HOST through, until the next start or --always
-ade net log work
+ade net revoke work HOST # take back an allow made this session
+ade net log work         # every decision, including the classifier's
 ade provision work       # re-run the provision script (machine must be stopped)
 ade rm work --yes        # delete the machine, its guest disk and ADE's state
 ```
@@ -246,8 +247,8 @@ is sent. Operation-level limits come from the credentials' own scopes.
 
 ### Classifier
 
-Optionally, a model on OpenRouter annotates each refused host in `ade net
-pending` as routine or suspicious, with a reason:
+With a classifier, a host no pattern allows is put to a model on OpenRouter,
+which answers allow, ask or deny:
 
 ```toml
 [network.classifier]
@@ -255,15 +256,38 @@ model = "typesafe/jev-1.14"
 api_key_ref = "pass:ade/openrouter"
 ```
 
+- **allow**: the request goes through, and that exact `host:port` stays
+  allowed until the workbench next starts. Registries, source hosts,
+  toolchains, mirrors and documentation sites should land here, so most new
+  hosts cost you nothing.
+- **ask**: refused with the "ade net allow" message. Hosts the model does not
+  recognise, paste and file-sharing services, and a model that is down, slow
+  (more than 10 seconds) or answers nonsense all land here.
+- **deny**: refused with the model's reason, and listed in `ade net pending`
+  in case it is wrong.
+
+The request waits for the answer, once per host per run; later requests for
+the same host reuse it. `ade net log` shows every automatic allow
+(`auto`), and `ade net revoke work HOST` takes one back for the rest of the
+session.
+
+The host name is written by the agent, so it is the one input that can be
+shaped to talk the model round. Two things limit that. Names shaped to carry
+data rather than name a service (raw IP addresses, punycode, a label over 40
+characters, more than six labels) go to you without the model seeing them,
+because once allowed, even looking a name up delivers it to that domain's DNS
+server. And an automatic allow is never a wildcard, never another port, and
+never written to `work.allow`; making it permanent stays your call.
+
+An allowed, well-known host can still carry data out (publishing a package,
+creating a gist): the proxy sees names, not requests. Keep the classifier off,
+and the allowlist short, for workbenches holding data that must not leave. The
+classifier sends OpenRouter the requested host and the allowlist, so leave it
+out where those names are confidential.
+
 The proxy runs in the background and cannot ask for a passphrase, so a `pass:`
-key needs a gpg-agent that is already unlocked; otherwise the verdict reads
-"unavailable" with the reason. It advises, never decides: a refused request
-stays refused until you allow it.
-It sees only the host, port and allowlist, which the agent can shape to
-persuade it, so its answer is sanitized before it is stored or shown and is
-never acted on. The call happens on the host after the refusal, so it adds no
-delay. Those host names leave for OpenRouter; leave the classifier out where
-they are confidential.
+key needs a gpg-agent that is already unlocked; otherwise every verdict is
+"ask", with the reason.
 
 ## Trust model
 
