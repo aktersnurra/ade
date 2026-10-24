@@ -107,6 +107,7 @@ let shipped_declaration file expected_network () =
         | Declaration.Sealed -> "sealed"
         | Declaration.Public -> "public"
         | Declaration.Allowlisted _ -> "allowlisted"
+        | Declaration.Proxied _ -> "proxied"
       in
       Alcotest.(check string) "network posture" expected_network actual
 
@@ -267,6 +268,35 @@ let anthropic_key_ref_is_optional () =
       Alcotest.(check (option string)) "none" None
         (Declaration.anthropic_api_key_ref declaration)
 
+let proxied_network =
+  replace_line ~find:{|posture = "allowlisted"|} ~replace:{|posture = "proxied"
+proxy = "127.0.0.1:3128"|}
+    (replace_line ~find:{|cidrs = ["10.0.0.0/8"]|} ~replace:"" valid_toml)
+
+let proxied_is_parsed () =
+  match Declaration.load (write_temp proxied_network) with
+  | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
+  | Ok declaration -> (
+      match Declaration.network declaration with
+      | Declaration.Proxied { hosts; proxy; classifier } ->
+          Alcotest.(check (list string)) "hosts" [ "github.com"; "api.github.com" ] hosts;
+          Alcotest.(check string) "proxy" "127.0.0.1:3128" proxy;
+          Alcotest.(check bool) "no classifier" true (classifier = None)
+      | _ -> Alcotest.fail "expected proxied")
+
+(* Only the proxy's address is fixed at creation; the hosts are not. *)
+let proxied_hosts_are_not_drift () =
+  let shape text =
+    match Declaration.load (write_temp text) with
+    | Ok declaration -> Declaration.creation_shape declaration
+    | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+  in
+  let edited =
+    replace_line ~find:{|hosts = ["github.com", "api.github.com"]|}
+      ~replace:{|hosts = ["github.com"]|} proxied_network
+  in
+  Alcotest.(check bool) "same shape" true (shape proxied_network = shape edited)
+
 let () =
   Alcotest.run "declaration"
     [ ( "valid",
@@ -297,6 +327,32 @@ let () =
             (rejects "workbench name"
                (replace_line ~find:{|name = "work"|} ~replace:{|name = "work bench"|}
                   valid_toml)) ] );
+      ( "proxied",
+        [ Alcotest.test_case "parsed" `Quick proxied_is_parsed;
+          Alcotest.test_case "hosts not drift" `Quick proxied_hosts_are_not_drift;
+          Alcotest.test_case "needs proxy" `Quick
+            (rejects "proxy"
+               (replace_line ~find:{|proxy = "127.0.0.1:3128"|} ~replace:"" proxied_network));
+          Alcotest.test_case "bad proxy" `Quick
+            (rejects "IPV4:PORT"
+               (replace_line ~find:{|proxy = "127.0.0.1:3128"|} ~replace:{|proxy = "localhost"|}
+                  proxied_network));
+          Alcotest.test_case "no cidrs" `Quick
+            (rejects "cidrs"
+               (replace_line ~find:{|posture = "allowlisted"|} ~replace:{|posture = "proxied"
+proxy = "127.0.0.1:3128"|} valid_toml));
+          Alcotest.test_case "bad host" `Quick
+            (rejects "network.hosts"
+               (replace_line ~find:{|hosts = ["github.com", "api.github.com"]|}
+                  ~replace:{|hosts = ["git hub.com"]|} proxied_network));
+          Alcotest.test_case "proxy elsewhere" `Quick
+            (rejects "only to a proxied"
+               (replace_line ~find:{|cidrs = ["10.0.0.0/8"]|}
+                  ~replace:{|cidrs = ["10.0.0.0/8"]
+proxy = "127.0.0.1:3128"|} valid_toml));
+          Alcotest.test_case "classifier needs key" `Quick
+            (rejects "api_key_ref"
+               (proxied_network ^ "\n[network.classifier]\nmodel = \"m\"\n")) ] );
       ( "anthropic",
         [ Alcotest.test_case "parsed" `Quick anthropic_key_ref_is_parsed;
           Alcotest.test_case "optional" `Quick anthropic_key_ref_is_optional;

@@ -203,7 +203,13 @@ let doctor_command =
       | None -> []
       | Some reference -> [ ("anthropic", Secret.of_reference reference) ]
     in
-    ssh @ github @ anthropic
+    let classifier =
+      match Declaration.network declaration with
+      | Declaration.Proxied { classifier = Some { api_key_ref; _ }; _ } ->
+          [ ("classifier", Secret.of_reference api_key_ref) ]
+      | _ -> []
+    in
+    ssh @ github @ anthropic @ classifier
   in
   let name =
     Arg.(value & pos 0 (some string) None & info [] ~docv:"NAME"
@@ -238,6 +244,119 @@ let doctor_command =
     (Cmd.info "doctor" ~doc:"Check the host, and optionally a workbench, have what ADE needs")
     Term.(const run $ name)
 
+let clock time =
+  let tm = Unix.localtime time in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1)
+    tm.Unix.tm_mday tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+
+(* What to type to allow a target: the bare host covers the web ports. *)
+let allow_argument (target : Egress.target) =
+  if target.port = 443 || target.port = 80 then target.host else Egress.render_target target
+
+let net_command =
+  let open Cmdliner in
+  let with_net name action =
+    match load_declaration name with
+    | Error error -> exit_of_error error
+    | Ok declaration -> (
+        match action (State_paths.make ()) declaration with
+        | Ok () -> 0
+        | Error error -> exit_of_error error)
+  in
+  let pending =
+    let run name =
+      with_net name (fun paths declaration ->
+          Result.map
+            (function
+              | [] -> print_endline "no blocked requests"
+              | entries ->
+                  List.iter
+                    (fun (entry : Egress.pending) ->
+                      Printf.printf "%s  (%d attempt%s, last %s)\n"
+                        (Egress.render_target entry.target) entry.attempts
+                        (if entry.attempts = 1 then "" else "s")
+                        (clock entry.last_attempt);
+                      (match entry.verdict with
+                       | Some (verdict, reason) ->
+                           Printf.printf "  classifier: %s: %s\n" (Egress.verdict_to_string verdict) reason
+                       | None -> ());
+                      Printf.printf "  allow with: ade net allow %s %s [--always]\n" name
+                        (allow_argument entry.target))
+                    entries)
+            (Net.pending ~paths declaration))
+    in
+    Cmd.v
+      (Cmd.info "pending" ~doc:"List requests the proxy refused that are still not allowed")
+      Term.(const run $ name_argument)
+  in
+  let allow =
+    let host =
+      Arg.(required & pos 1 (some string) None & info [] ~docv:"HOST"
+             ~doc:"HOST (ports 443 and 80), HOST:PORT, or *.SUFFIX.")
+    in
+    let always =
+      Arg.(value & flag & info [ "always" ]
+             ~doc:"Keep allowing it: add it to NAME.allow next to the declaration. Without this \
+                   it is allowed until the workbench next starts.")
+    in
+    let run name host always =
+      with_net name (fun paths declaration ->
+          let scope = if always then Net.Always else Net.Session in
+          Result.map
+            (fun file ->
+              if always then Printf.printf "allowed %s (added to %s)\n" host file
+              else Printf.printf "allowed %s until %s next starts\n" host name)
+            (Net.allow ~paths declaration ~host ~scope))
+    in
+    Cmd.v
+      (Cmd.info "allow" ~doc:"Allow a host through the workbench's egress proxy")
+      Term.(const run $ name_argument $ host $ always)
+  in
+  let log =
+    let count =
+      Arg.(value & opt int 50 & info [ "n" ] ~docv:"N" ~doc:"Show the last N entries.")
+    in
+    let run name count =
+      with_net name (fun paths declaration ->
+          Result.map
+            (fun events ->
+              let skip = max 0 (List.length events - count) in
+              List.iteri
+                (fun i event ->
+                  if i >= skip then
+                    match event with
+                    | Egress.Decision { time; target; allowed } ->
+                        Printf.printf "%s  %s  %s\n" (clock time)
+                          (if allowed then "allow" else "BLOCK")
+                          (Egress.render_target target)
+                    | Egress.Classified { time; host; verdict; reason } ->
+                        Printf.printf "%s  note   %s  %s: %s\n" (clock time) host
+                          (Egress.verdict_to_string verdict) reason)
+                events)
+            (Net.log ~paths declaration))
+    in
+    Cmd.v
+      (Cmd.info "log" ~doc:"Show the egress proxy's decisions and classifications")
+      Term.(const run $ name_argument $ count)
+  in
+  let serve =
+    let path =
+      Arg.(required & pos 0 (some file) None & info [] ~docv:"DECLARATION")
+    in
+    let run path =
+      match Net.serve ~paths:(State_paths.make ()) ~declaration_path:path with
+      | Ok () -> 0
+      | Error error -> exit_of_error error
+    in
+    Cmd.v
+      (Cmd.info "serve"
+         ~doc:"Run a workbench's egress proxy in the foreground. ade start runs this itself.")
+      Term.(const run $ path)
+  in
+  Cmd.group
+    (Cmd.info "net" ~doc:"Egress for proxied workbenches: blocked requests and approvals")
+    [ pending; allow; log; serve ]
+
 let commands =
   [
     doctor_command;
@@ -252,6 +371,7 @@ let commands =
     status_command;
     provision_command;
     pull_command;
+    net_command;
     rm_command;
   ]
 
