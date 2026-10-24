@@ -26,6 +26,12 @@ val provision : t -> Declaration.t -> (outcome, Ade_error.t) result
     runs, because stopping it would cut off whatever the agents are doing.
     [create] and [start] run it once, right after creating the machine. *)
 
+val refresh : t -> Declaration.t -> (outcome, Ade_error.t) result
+(** Mint and activate the next GitHub token in a running workbench. A stopped
+    workbench, or one without [[credentials.github]], converges as a no-op:
+    the next start mints a fresh token anyway. If minting fails, the active
+    token stays in place. *)
+
 val pull : t -> Declaration.t -> repo:string option -> (string list, Ade_error.t) result
 (** Start the machine if needed, then bring the agent's branches back from the
     clone mounts as [refs/remotes/agents/*]. See {!Pull}. *)

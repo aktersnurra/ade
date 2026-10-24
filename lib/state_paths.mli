@@ -30,3 +30,22 @@ val workbench_dir : t -> Workbench_name.t -> string
 
 val ensure_dir : string -> (unit, Ade_error.t) result
 (** Create a directory and its parents if absent. *)
+
+val net_dir : t -> Workbench_name.t -> string
+val net_log : t -> Workbench_name.t -> string
+(** The egress proxy's decisions and classifications, one JSON object a line. *)
+
+val session_allow_file : t -> Workbench_name.t -> string
+(** Hosts allowed with [ade net allow] until the workbench next starts. *)
+
+val proxy_pid_file : t -> Workbench_name.t -> string
+(** Held locked by the running proxy, so a stale pid is never signalled. *)
+
+val proxy_output_file : t -> Workbench_name.t -> string
+
+val auto_allow_file : t -> Workbench_name.t -> string
+(** Exact [host:port]s the classifier allowed, until the workbench next starts. *)
+
+val revoked_file : t -> Workbench_name.t -> string
+(** Hosts [ade net revoke] took back, refused until the workbench next starts
+    or until allowed again. *)

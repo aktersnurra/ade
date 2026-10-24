@@ -10,8 +10,10 @@ ade doctor          # every line ok or warn; fix any FAIL first
 
 ## 1. A bare workbench
 
-Copy `workbenches/work-offline.toml.example` (or any declaration) to
-`workbenches/smoke.toml`. Remove `[ssh]` and `[credentials.github]`, so no key
+Copy `workbenches/work-offline.toml` (or any declaration) to
+`~/.config/ade/workbenches/smoke.toml`, with `provision/` next to that
+directory if you keep the provision line. Run `ade doctor smoke` once it is in
+place. Remove `[ssh]` and `[credentials.github]`, so no key
 or token is involved, and add a clone mount of a throwaway repository:
 
 ```toml
@@ -54,9 +56,27 @@ ade exec smoke -- curl -sS -m 5 https://example.com    # must fail
 ade exec smoke -- curl -sS -m 5 https://1.1.1.1        # raw IP: blocked or not?
 ```
 
-The last one decides the egress proxy design. If a raw IP gets through, the
-SmolVM allowlist is a speed bump, not a boundary, and the proxy has to be
-the only route out.
+If a raw IP gets through, the SmolVM allowlist is a speed bump, not a
+boundary, and the proxied posture is the one to use.
+
+### The proxy
+
+Copy `workbenches/work-proxied.toml.example` to `smoke-proxy.toml` (rename
+`name`, drop the classifier for now) and:
+
+```sh
+ade create smoke-proxy && ade start smoke-proxy
+ade exec smoke-proxy -- ip route                                  # what is the host from here?
+ade exec smoke-proxy -- curl -sS -m 5 -o /dev/null -w '%{http_code}\n' https://github.com
+ade exec smoke-proxy -- curl -sS -m 5 https://example.com         # 403 from ade
+ade exec smoke-proxy -- curl -sS -m 5 --noproxy '*' https://github.com   # must fail: no direct route
+ade net pending smoke-proxy                                       # example.com listed
+```
+
+If the guest cannot reach `127.0.0.1:PORT`, set `network.proxy` to the host
+address `ip route` shows (the proxy listens on the same address), recreate, and
+note which one worked. The `--noproxy` line is the one that matters: a direct
+connection must not get out.
 
 ## 4. Identity and credentials (optional, needs setup)
 

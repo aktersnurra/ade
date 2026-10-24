@@ -43,6 +43,24 @@ let test_optional_tools_do_not_fail () =
   Alcotest.(check bool) "pass is a warning" true
     (verdict checks "pass" = Doctor.Optional_missing)
 
+(* A secret check reads the reference and keeps only whether it worked. *)
+let test_secret_checks () =
+  let readable = Secret.file ~path:"/keys/ok" in
+  let missing = Secret.file ~path:"/keys/missing" in
+  let read secret =
+    if secret == readable then Ok ()
+    else Error (Ade_error.Operation_refused { operation = "read credential"; reason = "no file" })
+  in
+  let checks =
+    Doctor.secret_checks ~read
+      [ ("ssh key", Ok readable); ("github key", Ok missing);
+        ("anthropic", Error "unknown secret scheme") ]
+  in
+  Alcotest.(check bool) "unhealthy" false (Doctor.healthy checks);
+  Alcotest.(check bool) "readable passes" true (verdict checks "ssh key" = Doctor.Pass);
+  Alcotest.(check bool) "unreadable fails" true (verdict checks "github key" = Doctor.Fail);
+  Alcotest.(check bool) "unparsable fails" true (verdict checks "anthropic" = Doctor.Fail)
+
 let () =
   Alcotest.run "doctor"
     [ ( "doctor",
@@ -51,4 +69,5 @@ let () =
           Alcotest.test_case "no kvm on linux" `Quick test_no_kvm_fails_on_linux;
           Alcotest.test_case "no kvm on macos" `Quick test_kvm_not_needed_on_macos;
           Alcotest.test_case "missing git" `Quick test_missing_git_fails;
-          Alcotest.test_case "optional tools" `Quick test_optional_tools_do_not_fail ] ) ]
+          Alcotest.test_case "optional tools" `Quick test_optional_tools_do_not_fail;
+          Alcotest.test_case "secrets" `Quick test_secret_checks ] ) ]

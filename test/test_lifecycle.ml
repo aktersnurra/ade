@@ -11,6 +11,9 @@ let services =
              ~populated:(mode = Ssh_agent.Populated)));
     stop_agent = (fun _ -> Ok ());
     install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+    start_proxy = (fun _ -> Ok ());
+    ensure_proxy = (fun _ -> Ok ());
+    stop_proxy = (fun _ -> Ok ());
   }
 
 (* A scripted fake runtime: it holds a machine state that create/start/stop
@@ -414,6 +417,51 @@ let another_process_holding_the_lock_refuses () =
        | Error error ->
            Alcotest.failf "lock not released with its owner: %s" (Ade_error.to_string error))
 
+(* Refresh only ever installs into a running machine that has a GitHub App;
+   anything else is left for the next start, which mints anyway. *)
+let refresh_with ~state ~github =
+  let installs = ref 0 in
+  let services =
+    { services with
+      Boot.install_credentials = (fun ~smolvm:_ ~name:_ _ -> incr installs; Ok ()) }
+  in
+  let fake = { state; calls = []; last_argv = []; stdins = []; exec_status = 0 } in
+  let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
+  let paths = State_paths.make ~root:(temp_root ()) () in
+  let lifecycle = Lifecycle.make ~services ~smolvm ~paths in
+  let base = declaration () in
+  let declaration =
+    if not github then base
+    else
+      let source = In_channel.with_open_bin (Declaration.path base) In_channel.input_all in
+      let path = Filename.temp_file "ade-work-" ".toml" in
+      Out_channel.with_open_bin path (fun channel ->
+          Out_channel.output_string channel
+            (source ^ "\n[credentials.github]\napp_id = \"1\"\n"));
+      match Declaration.load path with
+      | Ok declaration -> declaration
+      | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
+  in
+  let result = Lifecycle.refresh lifecycle declaration in
+  (result, !installs, fake)
+
+let refreshing_a_running_machine_installs () =
+  let result, installs, fake = refresh_with ~state:"running" ~github:true in
+  check_outcome "refresh" Lifecycle.Changed result;
+  Alcotest.(check int) "installed once" 1 installs;
+  Alcotest.(check string) "still running" "running" fake.state
+
+let refreshing_a_stopped_machine_converges () =
+  let result, installs, fake = refresh_with ~state:"stopped" ~github:true in
+  check_outcome "refresh" Lifecycle.Converged result;
+  Alcotest.(check int) "nothing installed" 0 installs;
+  Alcotest.(check string) "not started" "stopped" fake.state
+
+let refreshing_without_github_converges () =
+  let result, installs, _ = refresh_with ~state:"running" ~github:false in
+  check_outcome "refresh" Lifecycle.Converged result;
+  Alcotest.(check int) "nothing installed" 0 installs
+
 let () =
   Alcotest.run "lifecycle"
     [ ( "create",
@@ -441,6 +489,10 @@ let () =
           Alcotest.test_case "rerun" `Quick provision_reruns_on_a_stopped_machine;
           Alcotest.test_case "running" `Quick provision_refuses_a_running_machine;
           Alcotest.test_case "no script" `Quick provision_without_a_script_is_refused ] );
+      ( "refresh",
+        [ Alcotest.test_case "running" `Quick refreshing_a_running_machine_installs;
+          Alcotest.test_case "stopped" `Quick refreshing_a_stopped_machine_converges;
+          Alcotest.test_case "no github" `Quick refreshing_without_github_converges ] );
       ( "attach",
         [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
           Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );

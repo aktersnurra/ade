@@ -81,3 +81,18 @@
  (name test_doctor)
  (modules test_doctor)
  (libraries ade alcotest))
+
+(test
+ (name test_egress)
+ (modules test_egress)
+ (libraries ade alcotest yojson))
+
+(test
+ (name test_egress_proxy)
+ (modules test_egress_proxy)
+ (libraries ade alcotest unix threads.posix))
+
+(test
+ (name test_net)
+ (modules test_net)
+ (libraries ade alcotest unix threads.posix))

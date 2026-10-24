@@ -13,10 +13,18 @@ type image =
           contains. A workbench built from a locally produced image cannot pull
           from a registry, and a sealed workbench has no network to pull with. *)
 
+type classifier = { model : string; api_key_ref : string }
+(** An OpenRouter model that annotates refused requests for the user. *)
+
 type network =
   | Sealed
   | Public
   | Allowlisted of { hosts : string list; cidrs : string list }
+  | Proxied of { hosts : string list; proxy : string; classifier : classifier option }
+      (** The machine may reach only [proxy] ([IPV4:PORT]), where ADE's egress
+          proxy allows [hosts] ({!Egress.parse_pattern}) and refuses the rest.
+          The hosts are read while the machine runs, so they are not fixed at
+          creation. *)
 
 type ssh =
   | Disabled
@@ -76,6 +84,11 @@ val github_credential : t -> Otoml.t option
 (** The raw [[credentials.github]] table, if declared. Left unparsed here so
     the credential module owns its own schema; Declaration only decides whether
     one was given. *)
+
+val anthropic_api_key_ref : t -> string option
+(** [[credentials.anthropic] api_key_ref], a secret reference such as
+    ["pass:ade/work-anthropic"]. The key is installed into guest tmpfs at every
+    start for Claude Code; it is never part of the declaration itself. *)
 
 val creation_shape : t -> (string * string) list
 (** What the machine is created with and keeps until it is deleted, as

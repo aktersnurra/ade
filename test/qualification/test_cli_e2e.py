@@ -8,6 +8,7 @@ fake-runtime state file, so nothing touches real user or machine state.
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -58,13 +59,18 @@ class CliEndToEndTest(unittest.TestCase):
         wrapper.chmod(0o755)
         return wrapper
 
-    def ade(self, *args):
+    def ade(self, *args, cwd=None, declarations_env=True):
         env = dict(os.environ)
         env["ADE_SMOLVM_BIN"] = str(self.fake_runtime())
         env["ADE_STATE_ROOT"] = str(self.tmp / "state")
-        env["ADE_WORKBENCHES_DIR"] = str(self.declarations)
+        env.pop("ADE_WORKBENCHES_DIR", None)
+        if declarations_env:
+            env["ADE_WORKBENCHES_DIR"] = str(self.declarations)
+        else:
+            env["XDG_CONFIG_HOME"] = str(self.tmp / "config")
         return subprocess.run(
-            [str(ADE), *args], env=env, capture_output=True, text=True, timeout=60
+            [str(ADE), *args], env=env, capture_output=True, text=True, timeout=60,
+            cwd=cwd,
         )
 
     def machines(self):
@@ -169,6 +175,87 @@ class CliEndToEndTest(unittest.TestCase):
         result = self.ade("status", "does-not-exist")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("declaration", result.stderr)
+
+    def test_declarations_come_from_the_config_dir_not_the_cwd(self):
+        # A checkout with its own workbenches/ must not supply the policy.
+        result = self.ade("status", "work", cwd=self.tmp, declarations_env=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(self.tmp / "config" / "ade" / "workbenches"), result.stderr)
+
+        config = self.tmp / "config" / "ade"
+        config.mkdir(parents=True)
+        shutil.copytree(self.declarations, config / "workbenches")
+        shutil.copytree(self.tmp / "provision", config / "provision")
+        result = self.ade("status", "work", cwd=self.tmp, declarations_env=False)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("absent", result.stdout)
+
+    def test_refresh_of_a_stopped_workbench_is_a_no_op(self):
+        self.ade("create", "work")
+        result = self.ade("refresh", "work")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("already satisfied", result.stdout)
+        self.assertEqual(self.machines().get("work"), "stopped")
+
+    def proxied_declaration(self):
+        # A free port, and no classifier: these tests must not reach OpenRouter.
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        text = (REPO_ROOT / "workbenches" / "work-proxied.toml.example").read_text()
+        text = text.replace('proxy = "127.0.0.1:3128"', f'proxy = "127.0.0.1:{port}"')
+        text = text.split("[network.classifier]")[0] + "[services]\nherdr = true\n"
+        (self.declarations / "work-proxied.toml").write_text(text)
+        return port
+
+    def request(self, port, head):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+            conn.sendall(head.encode())
+            return conn.recv(4096).decode()
+
+    def test_proxied_start_runs_the_proxy_and_stop_ends_it(self):
+        port = self.proxied_declaration()
+        started = self.ade("start", "work-proxied")
+        self.assertEqual(started.returncode, 0, msg=started.stderr)
+        self.addCleanup(self.ade, "stop", "work-proxied")
+
+        refused = self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+        self.assertTrue(refused.startswith("HTTP/1.1 403"), refused)
+        self.assertIn("ade net allow work-proxied example.com", refused)
+
+        pending = self.ade("net", "pending", "work-proxied")
+        self.assertEqual(pending.returncode, 0, msg=pending.stderr)
+        self.assertIn("example.com:443", pending.stdout)
+
+        allowed = self.ade("net", "allow", "work-proxied", "example.com")
+        self.assertEqual(allowed.returncode, 0, msg=allowed.stderr)
+        self.assertIn("no blocked requests", self.ade("net", "pending", "work-proxied").stdout)
+
+        # The guest was told where its proxy is.
+        self.assertTrue(
+            any(line.startswith("machine exec") for line in self.calls()),
+            "guest proxy configuration was not written",
+        )
+
+        # A proxy that dies under a running machine comes back on the next
+        # command, keeping what was allowed this session.
+        pid_file = self.tmp / "state" / "workbenches" / "work-proxied" / "net" / "proxy.pid"
+        os.kill(int(pid_file.read_text().strip()), 9)
+        again = self.ade("start", "work-proxied")
+        self.assertEqual(again.returncode, 0, msg=again.stderr)
+        self.assertIn("no blocked requests", self.ade("net", "pending", "work-proxied").stdout)
+        refused = self.request(port, "CONNECT other.example:443 HTTP/1.1\r\n\r\n")
+        self.assertTrue(refused.startswith("HTTP/1.1 403"), refused)
+
+        stopped = self.ade("stop", "work-proxied")
+        self.assertEqual(stopped.returncode, 0, msg=stopped.stderr)
+        with self.assertRaises(OSError):
+            self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+
+    def test_net_commands_refuse_an_unproxied_workbench(self):
+        result = self.ade("net", "pending", "work")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a proxied workbench", result.stderr)
 
 
 if __name__ == "__main__":

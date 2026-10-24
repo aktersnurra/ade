@@ -26,13 +26,20 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
+  start_proxy : Declaration.t -> (unit, Ade_error.t) result;
+      (** A no-op unless the workbench is proxied. *)
+  ensure_proxy : Declaration.t -> (unit, Ade_error.t) result;
+      (** Restart a proxy that died under a running machine. *)
+  stop_proxy : Workbench_name.t -> (unit, Ade_error.t) result;
 }
 (** The host-side effects, injectable so tests never start a real agent or
     contact GitHub. *)
 
 val default_services : paths:State_paths.t -> services
-(** Real ssh-agent, and GitHub App credentials when the declaration has a
-    [[credentials.github]] table. *)
+(** Real ssh-agent, a GitHub App token when the declaration has a
+    [[credentials.github]] table, and an Anthropic API key when it has
+    [[credentials.anthropic]]. Installing into a running guest that already has
+    a token adds the next generation, so the same service refreshes. *)
 
 val start :
   services:services ->
@@ -52,9 +59,13 @@ val stop :
   paths:State_paths.t ->
   Workbench_name.t ->
   (unit, Ade_error.t) result
-(** Stop the running machine, then its agent. *)
+(** Stop the running machine, then its agent and proxy. *)
 
 val release_agent :
   services:services -> paths:State_paths.t -> Workbench_name.t -> (unit, Ade_error.t) result
 (** Stop and forget a recorded agent, if any. For a machine that stopped
     without ADE, or an earlier ADE process that died. *)
+
+val release :
+  services:services -> paths:State_paths.t -> Workbench_name.t -> (unit, Ade_error.t) result
+(** {!release_agent}, and stop the workbench's proxy if one runs. *)

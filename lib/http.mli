@@ -8,12 +8,16 @@
 val post :
   ?runner:Process_runner.t ->
   ?curl:string ->
+  ?headers:string list ->
+  ?timeout:int ->
   url:string ->
   bearer:string ->
   body:string ->
   unit ->
   (int * string, string) result
 (** POST a JSON [body] with a bearer token, returning the status and body.
+    [headers] defaults to GitHub's API headers. The call gives up after
+    [timeout] seconds (30 by default).
 
     The token is written to curl's stdin as a header rather than passed as an
     argument: anything in argv is readable from the process table by any local
