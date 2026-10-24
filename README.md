@@ -61,6 +61,9 @@ ade status work
 ade stop work
 ade pull work [REPO]     # bring the agents' branches back from clone mounts
 ade refresh work         # mint a fresh GitHub token into the running workbench
+ade net pending work     # requests a proxied workbench's proxy refused
+ade net allow work HOST  # let HOST through, until the next start or --always
+ade net log work
 ade provision work       # re-run the provision script (machine must be stopped)
 ade rm work --yes        # delete the machine, its guest disk and ADE's state
 ```
@@ -163,14 +166,15 @@ start leaves nothing running:
 1. With `[ssh] mode = "dedicated_agent"`, start a host `ssh-agent` holding only
    the key named by `key_ref`. The VM gets this agent's socket, never yours,
    and never the key. The key must have no passphrase.
-2. Boot the VM.
-3. With `[credentials.github]`, mint an installation token scoped to the
+2. With `posture = "proxied"`, start the workbench's egress proxy on the host.
+3. Boot the VM, and tell a proxied guest where its proxy is.
+4. With `[credentials.github]`, mint an installation token scoped to the
    declared repositories and permissions, verify GitHub granted no more, and
    install it into guest tmpfs.
 
-4. With `[credentials.anthropic]`, install the API key into guest tmpfs.
+5. With `[credentials.anthropic]`, install the API key into guest tmpfs.
 
-`ade stop` stops the VM, then its agent.
+`ade stop` stops the VM, then its agent and proxy.
 
 GitHub tokens last an hour and are minted at start. `ade refresh NAME` mints
 the next one into a running workbench without disturbing the agents, and is a
@@ -199,6 +203,67 @@ stored on the guest disk.
 
 Secret references (`key_ref`, `private_key_path`, `api_key_ref`) take `keychain:ITEM` (macOS
 Keychain), `pass:ENTRY` (password-store, the whole entry) or `file:PATH`.
+
+## Egress proxy
+
+SmolVM's allowlist is fixed when the machine is created and works at the DNS
+level. A `proxied` workbench instead may reach exactly one address, its proxy,
+which ADE runs on the host:
+
+```toml
+[network]
+posture = "proxied"
+proxy = "127.0.0.1:3128"     # what the guest connects to; one port per workbench
+hosts = ["github.com", "*.githubusercontent.com", "registry.npmjs.org:443"]
+```
+
+The proxy handles `CONNECT` and plain `http://` requests, one destination per
+connection, and resolves names itself, refusing any that resolve to loopback
+or link-local addresses. A host on the list goes through. Anything else gets a
+403 that says how to allow it, and nothing in the guest can allow anything:
+
+```sh
+ade net pending work                         # what was refused, and why
+ade net allow work registry.yarnpkg.com      # until the workbench next starts
+ade net allow work registry.yarnpkg.com --always   # appended to work.allow
+```
+
+`work.allow` sits next to `work.toml`, one pattern a line, so ADE never rewrites
+a file you wrote. The hosts, `work.allow` and the session approvals are read for
+every request, so all three apply to a running workbench; only `proxy` is fixed
+when the machine is created. A pattern is `HOST` (ports 443 and 80),
+`HOST:PORT`, or `*.SUFFIX` (names below the suffix, not the suffix itself).
+
+ADE writes `HTTPS_PROXY` and friends into the guest's shell profile (and
+passes them to `ade exec` and provisioning, which read no profile) and a
+Claude Code managed memory (`/etc/claude-code/CLAUDE.md`) telling agents that a
+403 from the proxy means asking you, not working around it. Tools that ignore
+the proxy variables have no route out at all. Git over SSH is not proxied; use
+HTTPS remotes, which the guest's credential helper authenticates.
+
+The proxy does not terminate TLS: it decides on names and ports, never on what
+is sent. Operation-level limits come from the credentials' own scopes.
+
+### Classifier
+
+Optionally, a model on OpenRouter annotates each refused host in `ade net
+pending` as routine or suspicious, with a reason:
+
+```toml
+[network.classifier]
+model = "typesafe/jev-1.14"
+api_key_ref = "pass:ade/openrouter"
+```
+
+The proxy runs in the background and cannot ask for a passphrase, so a `pass:`
+key needs a gpg-agent that is already unlocked; otherwise the verdict reads
+"unavailable" with the reason. It advises, never decides: a refused request
+stays refused until you allow it.
+It sees only the host, port and allowlist, which the agent can shape to
+persuade it, so its answer is sanitized before it is stored or shown and is
+never acted on. The call happens on the host after the refusal, so it adds no
+delay. Those host names leave for OpenRouter; leave the classifier out where
+they are confidential.
 
 ## Trust model
 
@@ -229,3 +294,8 @@ tests use a fake runtime. Known gaps:
 - `ade pull` is tested against real git with a simulated guest, not a real VM.
 - `provision/arch.sh` and the allowlist hosts for the Herdr and Claude Code
   installers are untested against the real services.
+- The egress proxy is tested on the host, not from inside a guest: whether
+  the guest reaches `network.proxy` (and only it) through
+  `--allow-cidr ADDRESS/32` is for the first real run.
+- The proxy log (`net/log` in the workbench's state) records every
+  connection and is never rotated.

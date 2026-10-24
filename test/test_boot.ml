@@ -66,6 +66,17 @@ let services world =
         if world.fail_credentials then
           Error (Ade_error.Operation_refused { operation = "credentials"; reason = "boom" })
         else Ok ());
+    (* Only a proxied declaration starts a proxy, so only that is noted; the
+       release at every start and stop is silent. *)
+    start_proxy =
+      (fun declaration ->
+        match Declaration.network declaration with
+        | Declaration.Proxied _ ->
+            note world "proxy start";
+            Ok ()
+        | _ -> Ok ());
+    ensure_proxy = (fun _ -> Ok ());
+    stop_proxy = (fun _ -> Ok ());
   }
 
 let temp_root () =
@@ -73,7 +84,7 @@ let temp_root () =
   Sys.remove path;
   path
 
-let declaration_with ~ssh =
+let declaration_with ?(network = "posture = \"sealed\"") ~ssh () =
   let path = Filename.temp_file "ade-boot-" ".toml" in
   let channel = open_out path in
   output_string channel
@@ -88,19 +99,23 @@ overlay_gib = 8
 workspace_gib = 16
 
 [network]
-posture = "sealed"
+%s
 
 %s
 
 |}
-       ssh);
+       network ssh);
   close_out channel;
   match Declaration.load path with
   | Ok declaration -> declaration
   | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
 
-let with_agent () = declaration_with ~ssh:"[ssh]\nmode = \"dedicated_agent\"\nkey_ref = \"pass:ade/work-ssh\""
-let without_agent () = declaration_with ~ssh:"[ssh]\nmode = \"disabled\""
+let with_agent () = declaration_with ~ssh:"[ssh]\nmode = \"dedicated_agent\"\nkey_ref = \"pass:ade/work-ssh\"" ()
+let without_agent () = declaration_with ~ssh:"[ssh]\nmode = \"disabled\"" ()
+let proxied () =
+  declaration_with
+    ~network:"posture = \"proxied\"\nhosts = [\"github.com\"]\nproxy = \"127.0.0.1:3128\""
+    ~ssh:"[ssh]\nmode = \"disabled\"" ()
 
 let setup () =
   let world = fresh () in
@@ -212,6 +227,20 @@ let stop_halts_machine_then_agent () =
   Alcotest.check log "order" [ "machine stop"; "agent stop" ] (events world);
   Alcotest.(check bool) "forgotten" false (record_exists paths declaration)
 
+(* The proxy is the machine's only route, so it is up before the machine
+   boots, and the guest is told about it before any credential arrives. *)
+let proxied_start_runs_the_proxy_first () =
+  let world, smolvm, paths = setup () in
+  expect_ok "start" (start world smolvm paths (proxied ()));
+  Alcotest.check log "order"
+    [ "proxy start"; "machine start"; "machine exec"; "machine exec"; "credentials" ]
+    (events world)
+
+let unproxied_start_writes_no_proxy_config () =
+  let world, smolvm, paths = setup () in
+  expect_ok "start" (start world smolvm paths (without_agent ()));
+  Alcotest.check log "order" [ "machine start"; "credentials" ] (events world)
+
 let () =
   Alcotest.run "boot"
     [
@@ -220,7 +249,9 @@ let () =
           Alcotest.test_case "maintenance" `Quick maintenance_start_is_unarmed;
           Alcotest.test_case "no ssh" `Quick no_agent_without_ssh;
           Alcotest.test_case "leftover agent" `Quick leftover_agent_is_stopped_first;
-          Alcotest.test_case "dead agent" `Quick dead_agent_is_not_signalled ] );
+          Alcotest.test_case "dead agent" `Quick dead_agent_is_not_signalled;
+          Alcotest.test_case "proxied" `Quick proxied_start_runs_the_proxy_first;
+          Alcotest.test_case "not proxied" `Quick unproxied_start_writes_no_proxy_config ] );
       ( "rollback",
         [ Alcotest.test_case "boot fails" `Quick failed_boot_stops_the_agent;
           Alcotest.test_case "credentials fail" `Quick failed_credentials_stop_machine_and_agent ] );

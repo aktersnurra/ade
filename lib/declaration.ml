@@ -2,10 +2,13 @@ type image =
   | Registry of { reference : string }
   | Local_artifact of { path : string; digest : string }
 
+type classifier = { model : string; api_key_ref : string }
+
 type network =
   | Sealed
   | Public
   | Allowlisted of { hosts : string list; cidrs : string list }
+  | Proxied of { hosts : string list; proxy : string; classifier : classifier option }
 
 type ssh =
   | Disabled
@@ -171,8 +174,35 @@ let parse_cidr value =
                 (Filename.quote value)));
       value
 
+(* The proxy's address, as an IPv4 address and port: it becomes the machine's
+   only allowed destination, so it must be exact. *)
+let parse_proxy value =
+  let fail_proxy () =
+    fail (Printf.sprintf "network.proxy must be IPV4:PORT, got %s" (Filename.quote value))
+  in
+  match String.rindex_opt value ':' with
+  | None -> fail_proxy ()
+  | Some colon -> (
+      let address = String.sub value 0 colon in
+      ignore (parse_cidr (address ^ "/32"));
+      match int_of_string_opt (String.sub value (colon + 1) (String.length value - colon - 1)) with
+      | Some port when port > 0 && port < 65536 -> value
+      | Some _ | None -> fail_proxy ())
+
+let parse_classifier table =
+  reject_unknown ~context:"[network.classifier]" table [ "model"; "api_key_ref" ];
+  let model = as_string "network.classifier.model" (require table "model" "[network.classifier]") in
+  let api_key_ref =
+    as_string "network.classifier.api_key_ref"
+      (require table "api_key_ref" "[network.classifier]")
+  in
+  if model = "" then fail "network.classifier.model must not be empty";
+  if api_key_ref = "" then fail "network.classifier.api_key_ref must not be empty";
+  { model; api_key_ref }
+
 let parse_network table =
-  reject_unknown ~context:"[network]" table [ "posture"; "hosts"; "cidrs" ];
+  reject_unknown ~context:"[network]" table
+    [ "posture"; "hosts"; "cidrs"; "proxy"; "classifier" ];
   let posture = as_string "network.posture" (require table "posture" "[network]") in
   let hosts =
     match find table "hosts" with
@@ -188,15 +218,39 @@ let parse_network table =
   | "sealed" ->
       if hosts <> [] || cidrs <> [] then
         fail "sealed network must not declare hosts or cidrs";
+      if find table "proxy" <> None || find table "classifier" <> None then
+        fail "proxy and classifier apply only to a proxied network";
       Sealed
   | "public" ->
       if hosts <> [] || cidrs <> [] then
         fail "public network must not declare hosts or cidrs";
+      if find table "proxy" <> None || find table "classifier" <> None then
+        fail "proxy and classifier apply only to a proxied network";
       Public
   | "allowlisted" ->
       if hosts = [] && cidrs = [] then
         fail "allowlisted network must declare at least one host or CIDR";
+      if find table "proxy" <> None || find table "classifier" <> None then
+        fail "proxy and classifier apply only to a proxied network";
       Allowlisted { hosts; cidrs }
+  | "proxied" ->
+      if cidrs <> [] then
+        fail "a proxied network reaches only its proxy, so it must not declare cidrs";
+      List.iter
+        (fun host ->
+          match Egress.parse_pattern host with
+          | Ok _ -> ()
+          | Error reason -> fail ("network.hosts: " ^ reason))
+        hosts;
+      let proxy = parse_proxy (as_string "network.proxy" (require table "proxy" "[network]")) in
+      let classifier =
+        match find table "classifier" with
+        | Some (Otoml.TomlTable _ as classifier) | Some (Otoml.TomlInlineTable _ as classifier) ->
+            Some (parse_classifier classifier)
+        | Some _ -> fail "[network.classifier] must be a table"
+        | None -> None
+      in
+      Proxied { hosts; proxy; classifier }
   | other ->
       fail
         (Printf.sprintf "unknown network posture %s (expected sealed, public or allowlisted)"
@@ -451,7 +505,14 @@ let canonical d =
    | Allowlisted { hosts; cidrs } ->
        line "network" "allowlisted";
        line "hosts" (String.concat "," (List.sort String.compare hosts));
-       line "cidrs" (String.concat "," (List.sort String.compare cidrs)));
+       line "cidrs" (String.concat "," (List.sort String.compare cidrs))
+   | Proxied { hosts; proxy; classifier } ->
+       line "network" "proxied";
+       line "hosts" (String.concat "," (List.sort String.compare hosts));
+       line "proxy" proxy;
+       Option.iter
+         (fun c -> line "classifier" (c.model ^ " " ^ c.api_key_ref))
+         classifier);
   (match d.ssh with
    | Disabled -> line "ssh" "disabled"
    | Dedicated_agent { key_ref } ->
@@ -477,6 +538,10 @@ let creation_shape d =
         "allowlisted"
         :: List.map (( ^ ) "host ") (List.sort String.compare hosts)
         @ List.map (( ^ ) "cidr ") (List.sort String.compare cidrs)
+    (* The proxy enforces the hosts while the machine runs, so they can change
+       without recreating it; only the one address the machine may reach is
+       fixed at creation. *)
+    | Proxied { proxy; _ } -> [ "proxied"; "proxy " ^ proxy ]
   in
   let mount m =
     Printf.sprintf "%s:%s:%s" m.host m.guest

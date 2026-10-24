@@ -13,10 +13,18 @@ type image =
           contains. A workbench built from a locally produced image cannot pull
           from a registry, and a sealed workbench has no network to pull with. *)
 
+type classifier = { model : string; api_key_ref : string }
+(** An OpenRouter model that annotates refused requests for the user. *)
+
 type network =
   | Sealed
   | Public
   | Allowlisted of { hosts : string list; cidrs : string list }
+  | Proxied of { hosts : string list; proxy : string; classifier : classifier option }
+      (** The machine may reach only [proxy] ([IPV4:PORT]), where ADE's egress
+          proxy allows [hosts] ({!Egress.parse_pattern}) and refuses the rest.
+          The hosts are read while the machine runs, so they are not fixed at
+          creation. *)
 
 type ssh =
   | Disabled

@@ -118,6 +118,11 @@ let create_argv declaration ~mounts =
         [ "--net" ]
         @ List.concat_map (fun host -> [ "--allow-host"; host ]) hosts
         @ List.concat_map (fun cidr -> [ "--allow-cidr"; cidr ]) cidrs
+    (* The proxy's address is the one destination; every host the agents use
+       is decided by the proxy, not by the runtime. *)
+    | Declaration.Proxied { proxy; _ } ->
+        let address = String.sub proxy 0 (String.rindex proxy ':') in
+        [ "--net"; "--allow-cidr"; address ^ "/32" ]
   in
   (* Only mounts that passed the host policy reach the runtime, and the runtime
      re-checks each source against its own list of system paths. *)

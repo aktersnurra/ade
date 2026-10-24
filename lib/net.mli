@@ -1,0 +1,48 @@
+(** Egress for proxied workbenches: approvals, the decision log, the proxy
+    process and the guest's view of it.
+
+    Allowed hosts come from three places, read for every request: the
+    declaration's [network.hosts]; [NAME.allow] next to the declaration, for
+    hosts allowed with [--always]; and a session list in ADE's state, for hosts
+    allowed until the workbench next starts. All three are on the host. *)
+
+val allow_file : Declaration.t -> string
+
+val allowed_hosts : paths:State_paths.t -> Declaration.t -> string list
+
+type scope =
+  | Session  (** until the workbench next starts *)
+  | Always  (** appended to [NAME.allow] *)
+
+val allow :
+  paths:State_paths.t -> Declaration.t -> host:string -> scope:scope -> (string, Ade_error.t) result
+(** Allow a host pattern, returning the file it was written to. *)
+
+val pending : paths:State_paths.t -> Declaration.t -> (Egress.pending list, Ade_error.t) result
+val log : paths:State_paths.t -> Declaration.t -> (Egress.event list, Ade_error.t) result
+
+val start : paths:State_paths.t -> Declaration.t -> (unit, Ade_error.t) result
+(** Start the workbench's proxy, replacing one already running, and clear the
+    session approvals. A no-op for a workbench that is not proxied. *)
+
+val ensure : paths:State_paths.t -> Declaration.t -> (unit, Ade_error.t) result
+(** Start the proxy only if it is not running, keeping the session approvals:
+    for a running machine whose proxy died. *)
+
+val stop : paths:State_paths.t -> Workbench_name.t -> (unit, Ade_error.t) result
+(** Stop the proxy if it runs. *)
+
+val serve : paths:State_paths.t -> declaration_path:string -> (unit, Ade_error.t) result
+(** Run the proxy in this process until it is killed. [ade net serve] is the
+    only caller; {!start} runs it in the background. *)
+
+val environment : Declaration.t -> (string * string) list
+(** The proxy variables a guest process needs; empty unless proxied. *)
+
+val guest_memory : workbench:string -> string
+(** The Claude Code managed memory telling agents how a block is resolved. *)
+
+val configure_guest :
+  smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result
+(** Write the proxy environment and the managed memory into a running guest.
+    A no-op unless proxied. *)

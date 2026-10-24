@@ -1,4 +1,7 @@
-let post ?runner ?(curl = "/usr/bin/curl") ~url ~bearer ~body () =
+let github_headers =
+  [ "Accept: application/vnd.github+json"; "X-GitHub-Api-Version: 2022-11-28" ]
+
+let post ?runner ?(curl = "/usr/bin/curl") ?(headers = github_headers) ~url ~bearer ~body () =
   let runner = match runner with Some r -> r | None -> Process_runner.run in
   (* The bearer token goes in via @- (stdin) rather than -H on the command
      line, so it never appears in argv where another local process could read
@@ -13,12 +16,14 @@ let post ?runner ?(curl = "/usr/bin/curl") ~url ~bearer ~body () =
         [
           "--silent"; "--show-error";
           "--request"; "POST";
-          "--header"; "Accept: application/vnd.github+json";
-          "--header"; "X-GitHub-Api-Version: 2022-11-28";
+          "--max-time"; "30";
+        ]
+        @ List.concat_map (fun header -> [ "--header"; header ]) headers
+        @ [
           "--header"; "@-";
-          (* The body is the requested scope: repository names and
-             permission levels. It is not secret, so argv is acceptable;
-             stdin is already carrying the bearer header. *)
+          (* The body is never secret (a token scope, or the host a
+             classifier is asked about), so argv is acceptable; stdin is
+             already carrying the bearer header. *)
           "--header"; "Content-Type: application/json";
           "--data-binary"; body;
           "--write-out"; "\n%{http_code}";

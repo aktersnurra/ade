@@ -1,0 +1,61 @@
+# Example: a workbench whose only route out is ADE's egress proxy.
+#
+# Copy to work-proxied.toml. The machine may reach only network.proxy; the
+# proxy, on the host, lets through the hosts below and refuses everything else
+# with a 403 explaining how to allow it. Approve a refused host on the host:
+#
+#   ade net pending work-proxied
+#   ade net allow work-proxied registry.yarnpkg.com            # until next start
+#   ade net allow work-proxied registry.yarnpkg.com --always   # into work-proxied.allow
+#
+# Hosts are read for every request, so editing them here, or in
+# work-proxied.allow, applies to a running workbench without recreating it.
+#
+# Git over SSH does not go through an HTTP proxy, so use HTTPS remotes; the
+# guest's git credential helper supplies the GitHub token for them.
+
+name = "work-proxied"
+image = "docker.io/menci/archlinuxarm:base-devel"
+provision = "../provision/arch.sh"
+
+[resources]
+cpus = 6
+memory_mib = 12288
+overlay_gib = 32
+workspace_gib = 256
+
+[network]
+posture = "proxied"
+# The address the guest connects to and the proxy listens on. Each proxied
+# workbench needs its own port. Confirm on a first real run that the guest
+# reaches the host here (docs/smoke-run.md).
+proxy = "127.0.0.1:3128"
+hosts = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "objects.githubusercontent.com",
+  "registry.npmjs.org",
+  # Arch mirrors, the Herdr and Claude Code installers, and the agent API.
+  "geo.mirror.pkgbuild.com",
+  "mirror.archlinuxarm.org",
+  "*.mirror.archlinuxarm.org",
+  "herdr.dev",
+  "claude.ai",
+  "downloads.claude.ai",
+  "api.anthropic.com",
+]
+
+# Optional: a model that annotates refused requests in ade net pending. It
+# never allows anything. It sees the refused host and this allowlist, which
+# leave the host for OpenRouter, so leave it out where host names are
+# confidential.
+[network.classifier]
+model = "typesafe/jev-1.14"
+api_key_ref = "pass:ade/openrouter"
+
+[services]
+herdr = true
+
+[ssh]
+mode = "disabled"
