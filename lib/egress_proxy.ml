@@ -1,8 +1,10 @@
+type decision = Pass | Refuse of string option
+
 type config = {
   workbench : string;
   policy : unit -> Egress.pattern list;
+  decide : Egress.target -> decision;
   record : Egress.event -> unit;
-  refused : Egress.target -> unit;
   resolve : Egress.target -> (Unix.sockaddr list, string) result;
 }
 
@@ -109,12 +111,15 @@ let handle config client =
           let target =
             match request with Egress.Connect target | Egress.Forward { target; _ } -> target
           in
-          let allowed = Egress.allowed (config.policy ()) target in
-          config.record (Egress.Decision { time = Unix.gettimeofday (); target; allowed });
-          if not allowed then (
-            send client (Egress.blocked_response ~workbench:config.workbench target);
-            config.refused target)
-          else
+          let decision =
+            if Egress.allowed (config.policy ()) target then Pass else config.decide target
+          in
+          config.record
+            (Egress.Decision { time = Unix.gettimeofday (); target; allowed = decision = Pass });
+          match decision with
+          | Refuse reason ->
+              send client (Egress.blocked_response ?reason ~workbench:config.workbench target)
+          | Pass ->
             match config.resolve target with
             | Error reason ->
                 send client

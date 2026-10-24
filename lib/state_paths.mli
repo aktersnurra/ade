@@ -42,3 +42,10 @@ val proxy_pid_file : t -> Workbench_name.t -> string
 (** Held locked by the running proxy, so a stale pid is never signalled. *)
 
 val proxy_output_file : t -> Workbench_name.t -> string
+
+val auto_allow_file : t -> Workbench_name.t -> string
+(** Exact [host:port]s the classifier allowed, until the workbench next starts. *)
+
+val revoked_file : t -> Workbench_name.t -> string
+(** Hosts [ade net revoke] took back, refused until the workbench next starts
+    or until allowed again. *)

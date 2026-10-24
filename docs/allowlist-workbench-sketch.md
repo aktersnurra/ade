@@ -2,8 +2,8 @@
 
 Partly implemented: mounts, the start sequence, scoped GitHub tokens, clone
 mode with `ade pull`, and the egress proxy in its refuse-and-approve form
-(`posture = "proxied"`, `ade net`, with an advisory classifier) are in the
-README. Holding a request open while the user answers, and learn mode, are not.
+(`posture = "proxied"`, `ade net`, with a classifier that allows, asks or
+denies) are in the README. Holding a request open while the user answers, and learn mode, are not.
 This proposes what ADE becomes if its first job is the one it
 was started for: **run a group of agents in one VM that can see only the
 directories I choose, reach only the hosts I choose, and act under an identity

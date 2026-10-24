@@ -18,6 +18,29 @@ val allow :
   paths:State_paths.t -> Declaration.t -> host:string -> scope:scope -> (string, Ade_error.t) result
 (** Allow a host pattern, returning the file it was written to. *)
 
+val revoke : paths:State_paths.t -> Declaration.t -> host:string -> (bool, Ade_error.t) result
+(** Take back a host allowed this session, by the user or the classifier, and
+    refuse it until the workbench next starts or it is allowed again. [true]
+    when the declaration or [NAME.allow] still lists it, which only the user
+    can change. *)
+
+type classify =
+  target:Egress.target -> allowed:string list -> recent:string list -> Egress.verdict * string
+
+val decider :
+  paths:State_paths.t ->
+  name:Workbench_name.t ->
+  record:(Egress.event -> unit) ->
+  allowed:(unit -> string list) ->
+  classify:classify option ->
+  Egress.target ->
+  Egress_proxy.decision
+(** How the proxy decides a destination no pattern allows: revoked hosts and
+    names of an {!Egress.unusual_shape} are refused for the user; otherwise
+    the classifier decides, once per target per proxy run. An [Allow] is
+    recorded as an exact [host:port] in the session's auto-allowed list.
+    Without a classifier everything is refused for the user. *)
+
 val pending : paths:State_paths.t -> Declaration.t -> (Egress.pending list, Ade_error.t) result
 val log : paths:State_paths.t -> Declaration.t -> (Egress.event list, Ade_error.t) result
 
