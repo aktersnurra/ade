@@ -29,7 +29,8 @@ let pump ~stdin_fd ~stdin_payload ~stdout_fd ~stderr_fd =
   let stdout_buffer = Buffer.create 4096 in
   let stderr_buffer = Buffer.create 4096 in
   let chunk = Bytes.create 65536 in
-  let pending = ref stdin_payload in
+  let offset = ref 0 in
+  Option.iter Unix.set_nonblock stdin_fd;
   let stdin_open = ref (stdin_fd <> None) in
   let open_reads = ref [ stdout_fd; stderr_fd ] in
   let close fd =
@@ -42,7 +43,7 @@ let pump ~stdin_fd ~stdin_payload ~stdout_fd ~stderr_fd =
      | None -> ());
     stdin_open := false
   in
-  if !stdin_open && !pending = "" then close_stdin ();
+  if !stdin_open && stdin_payload = "" then close_stdin ();
   while !open_reads <> [] || !stdin_open do
     let writes = if !stdin_open then Option.to_list stdin_fd else [] in
     let readable, writable, _ = Unix.select !open_reads writes [] 1.0 in
@@ -57,13 +58,14 @@ let pump ~stdin_fd ~stdin_payload ~stdout_fd ~stderr_fd =
       readable;
     List.iter
       (fun fd ->
-        let payload = !pending in
-        let written =
-          try Unix.write_substring fd payload 0 (String.length payload)
-          with Unix.Unix_error _ -> String.length payload
-        in
-        pending := String.sub payload written (String.length payload - written);
-        if !pending = "" then close_stdin ())
+        (try
+           let written = Unix.write_substring fd stdin_payload !offset
+               (String.length stdin_payload - !offset) in
+           offset := !offset + written;
+           if !offset = String.length stdin_payload then close_stdin ()
+         with
+         | Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK | Unix.EINTR), _, _) -> ()
+         | Unix.Unix_error (Unix.EPIPE, _, _) -> close_stdin ()))
       writable
   done;
   (Buffer.contents stdout_buffer, Buffer.contents stderr_buffer)

@@ -55,10 +55,10 @@ let contains haystack needle =
   let rec scan i = i + nl <= hl && (String.sub haystack i nl = needle || scan (i + 1)) in
   nl = 0 || scan 0
 
-let start ?identities ?(mode = Ssh_agent.Populated) ?identity () =
+let start ?identities ?mode () =
   let fake, runner = setup ?identities () in
-  let identity = match identity with Some i -> i | None -> Some (identity_file ()) in
-  (fake, Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work") ~mode ~identity ())
+  let mode = match mode with Some mode -> mode | None -> Ssh_agent.With_identity (identity_file ()) in
+  (fake, Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work") ~mode ())
 
 let a_populated_agent_loads_the_identity () =
   let fake, result = start () in
@@ -85,25 +85,6 @@ let a_maintenance_agent_stays_empty () =
         (List.exists
            (fun r -> Filename.basename r.Process_runner.executable = "ssh-add")
            fake.requests)
-
-(* Passing an identity to a maintenance agent must not load it: the mode
-   decides, so a caller cannot accidentally arm a maintenance window. *)
-let a_maintenance_agent_ignores_a_supplied_identity () =
-  let fake, result = start ~mode:Ssh_agent.Empty ~identity:(Some (identity_file ())) () in
-  match result with
-  | Error e -> Alcotest.failf "start: %s" (Ade_error.to_string e)
-  | Ok agent ->
-      Alcotest.(check bool) "still empty" false (Ssh_agent.is_populated agent);
-      Alcotest.(check bool) "no ssh-add" false
-        (List.exists
-           (fun r -> Filename.basename r.Process_runner.executable = "ssh-add")
-           fake.requests)
-
-let a_populated_agent_requires_an_identity () =
-  let _, result = start ~identity:None () in
-  match result with
-  | Error _ -> ()
-  | Ok _ -> Alcotest.fail "expected a populated agent to require an identity"
 
 (* The key must reach ssh-add on stdin, never as an argument. *)
 let the_key_never_reaches_argv () =
@@ -145,7 +126,7 @@ let an_empty_agent_reports_no_identities () =
   ignore fake;
   match
     Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work")
-      ~mode:Ssh_agent.Empty ~identity:None ()
+      ~mode:Ssh_agent.Empty ()
   with
   | Error e -> Alcotest.failf "start: %s" (Ade_error.to_string e)
   | Ok agent -> (
@@ -158,7 +139,7 @@ let a_populated_agent_reports_its_identities () =
   ignore fake;
   match
     Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work")
-      ~mode:Ssh_agent.Populated ~identity:(Some (identity_file ())) ()
+      ~mode:(Ssh_agent.With_identity (identity_file ())) ()
   with
   | Error e -> Alcotest.failf "start: %s" (Ade_error.to_string e)
   | Ok agent -> (
@@ -171,7 +152,7 @@ let stopping_the_agent_kills_it () =
   let fake, runner = setup () in
   match
     Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work")
-      ~mode:Ssh_agent.Empty ~identity:None ()
+      ~mode:Ssh_agent.Empty ()
   with
   | Error e -> Alcotest.failf "start: %s" (Ade_error.to_string e)
   | Ok agent -> (
@@ -185,18 +166,29 @@ let stopping_the_agent_kills_it () =
                  && List.mem "-k" r.Process_runner.argv)
                fake.requests))
 
+let failed_identity_read_releases_the_agent () =
+  let fake, runner = setup () in
+  let result = Ssh_agent.start ~runner ~paths:(paths ()) ~name:(name_exn "work")
+      ~mode:(Ssh_agent.With_identity (Secret.file ~path:"/nonexistent/ade-key")) () in
+  Alcotest.(check bool) "read failed" true (Result.is_error result);
+  Alcotest.(check bool) "released" true
+    (List.exists (fun r -> List.mem "-k" r.Process_runner.argv) fake.requests)
+
+let failed_stop_is_reported () =
+  let agent = Ssh_agent.of_record ~socket:"/nonexistent/ade.sock" ~pid:"4242" ~populated:true in
+  let runner _ = Ok { Process_runner.status = 1; stdout = ""; stderr = "kill failed" } in
+  Alcotest.(check bool) "stop failed" true (Result.is_error (Ssh_agent.stop ~runner agent))
+
 let () =
   Alcotest.run "ssh_agent"
     [ ( "lifecycle",
-        [ Alcotest.test_case "populated loads" `Quick a_populated_agent_loads_the_identity;
-          Alcotest.test_case "requires identity" `Quick
-            a_populated_agent_requires_an_identity;
+        [ Alcotest.test_case "failed read releases" `Quick failed_identity_read_releases_the_agent;
+          Alcotest.test_case "failed kill" `Quick failed_stop_is_reported;
+          Alcotest.test_case "populated loads" `Quick a_populated_agent_loads_the_identity;
           Alcotest.test_case "socket" `Quick the_socket_is_read_from_the_agent;
           Alcotest.test_case "stop" `Quick stopping_the_agent_kills_it ] );
       ( "maintenance",
         [ Alcotest.test_case "stays empty" `Quick a_maintenance_agent_stays_empty;
-          Alcotest.test_case "ignores identity" `Quick
-            a_maintenance_agent_ignores_a_supplied_identity;
           Alcotest.test_case "observably empty" `Quick
             an_empty_agent_reports_no_identities;
           Alcotest.test_case "populated counted" `Quick

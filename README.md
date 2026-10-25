@@ -138,8 +138,8 @@ mode = "clone"                  # guest defaults to /src/project-a, read-only
 
 The agent clones into its own disk (`git clone /src/project-a /workspace/project-a`)
 and commits, branches and rebases freely. `ade pull work` then has the guest
-write `git bundle create /outbox/project-a.bundle --branches`, checks on the host
-that the file is a regular file and a valid bundle, and fetches it into your
+write `git bundle create /outbox/project-a.bundle --branches`, copies the regular-file export into private host staging, verifies that stable
+copy, and fetches it into your
 repository as `refs/remotes/agents/*` with object checking on. Your branches,
 working tree and config are never touched; review and merge agent branches like a
 colleague's. In a colocated jj repository, jj imports the refs on its next
@@ -155,14 +155,27 @@ Mounts, resources, the network and whether an SSH agent is forwarded are fixed
 when the machine is created; changing them takes effect after `ade rm` and
 `ade create`. ADE records what each machine was created with, so after such an
 edit `ade status` reports the drift, `start`, `attach`, `exec` and `pull` warn,
-and `create` refuses instead of claiming the machine matches. The SSH key,
-credentials and Herdr apply at every start and are not drift.
+and `create` refuses instead of claiming the machine matches. Creation manifests
+are versioned and record resolved host paths; `pull` uses those recorded repository
+targets even if the declaration or a symlink changes. Clone repository names must
+be unique within a workbench. The SSH key, credentials and Herdr apply at every
+start and are not drift.
+
+Missing, unreadable, legacy or unsupported creation records are reported as
+**unknown**, not as a match. `create` and `pull` refuse to claim a match or infer
+repository targets from unknown records. There is no automatic adoption of legacy
+records: preserve any guest work before deliberately recreating a machine.
+
+When upgrading from the old state format, finish all operations using the old ADE
+binary first. Locks now live under `STATE_ROOT/locks/`, outside deletable workbench
+state, so removing a machine cannot invalidate another operation's lock.
 
 ## What start does
 
 `ade start`, and `attach` and `exec` when the workbench is stopped, bring it up
-in this order. If a step fails, the steps before it are undone, so a failed
-start leaves nothing running:
+in this order. If a step fails, ADE attempts to undo acquired resources. If cleanup
+also fails, it reports both failures and retains the SSH-agent recovery record
+rather than claiming that everything stopped:
 
 1. With `[ssh] mode = "dedicated_agent"`, start a host `ssh-agent` holding only
    the key named by `key_ref`. The VM gets this agent's socket, never yours,
@@ -175,7 +188,9 @@ start leaves nothing running:
 
 5. With `[credentials.anthropic]`, install the API key into guest tmpfs.
 
-`ade stop` stops the VM, then its agent and proxy.
+`ade stop` stops the VM, then its agent and proxy. Booting, stopping and failed
+runtime observations remain explicit: lifecycle commands refuse them instead of
+reporting false convergence.
 
 GitHub tokens last an hour and are minted at start. `ade refresh NAME` mints
 the next one into a running workbench without disturbing the agents, and is a
@@ -329,9 +344,14 @@ state, so treat the guest disk as potentially secret-bearing.
 ## Testing
 
 ```sh
-dune runtest                               # unit suites
+dune runtest                               # unit suites + Hegel properties
 python3 -m unittest discover -s test -t .  # CLI end-to-end against a fake SmolVM
 ```
+
+The property suites exercise arbitrary decoder input, credential evidence and
+transport, declaration identity, resource cleanup and lifecycle command sequences.
+Pull tests use real git, and activation tests execute the actual shell commands in
+a relocated temporary filesystem. Hegel 0.25.0 or newer is a test-only dependency.
 
 ## Status
 

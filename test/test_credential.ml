@@ -69,10 +69,22 @@ let audit_records_are_secret_free () =
   Alcotest.(check bool) "records outcome" true (contains "installed");
   Alcotest.(check bool) "no secret" false (contains "token")
 
+let lifetimes_are_finite_and_bounded () =
+  Hegel.run_hegel_test ~database_key:"credential-lifetime" (fun tc ->
+      let now = Hegel.draw ~label:"now" tc (Hegel.Generators.floats ()) in
+      let expires_at = Hegel.draw ~label:"expires_at" tc (Hegel.Generators.floats ()) in
+      match Credential.validate ~now ~value:"token" ~expires_at with
+      | Error _ -> ()
+      | Ok () ->
+          Hegel.require tc ~msg:"accepted lifetime must have finite endpoints"
+            (Float.is_finite now && Float.is_finite expires_at);
+          Hegel.require tc (expires_at > now && expires_at -. now <= 86400.))
+
 let () =
   Alcotest.run "credential"
     [ ( "validation",
-        [ Alcotest.test_case "empty" `Quick empty_credentials_are_rejected;
+        [ Alcotest.test_case "finite lifetime property" `Quick lifetimes_are_finite_and_bounded;
+          Alcotest.test_case "empty" `Quick empty_credentials_are_rejected;
           Alcotest.test_case "expired" `Quick already_expired_credentials_are_rejected;
           Alcotest.test_case "too long" `Quick overly_long_credentials_are_rejected;
           Alcotest.test_case "valid" `Quick a_valid_credential_is_accepted ] );

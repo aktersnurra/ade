@@ -19,16 +19,12 @@ val secrets_root : string
 val install :
   smolvm:Smolvm.t ->
   name:Workbench_name.t ->
-  provider:Credential.provider ->
-  value:string ->
-  expires_at:float ->
+  credential:Github_credential.minted ->
   now:float ->
   previous:Credential.generation option ->
   (installed, Ade_error.t) result
-(** Mint-time validation, then install and atomically activate.
-
-    If validation fails the working generation stays active and is not revoked:
-    a failed rotation must never leave a workbench with no usable credential. *)
+(** Install a scope- and lifetime-verified token, then atomically activate it.
+    Only a successful exchange can construct the required credential. *)
 
 val revoke :
   smolvm:Smolvm.t ->

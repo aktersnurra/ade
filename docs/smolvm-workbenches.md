@@ -55,6 +55,14 @@ existing machine never recreates it.
 
 Attach brings the machine up under the per-workbench lock and then releases it:
 an interactive session must not block every other operation on the workbench.
+Pull instead retains the lock across export, private host staging, verification
+and import. Lock files live outside the deletable workbench state directory.
+
+Creation manifests contain versioned, resolved inputs, not just declaration text.
+Missing or unsupported records are unknown, not matching; `create` and `pull`
+refuse to infer creation facts. Pull targets the recorded repositories. Runtime
+states such as booting, stopping and failed are preserved and refused by lifecycle
+transitions until the runtime reports a settled state.
 
 ## Credentials
 
@@ -66,5 +74,11 @@ ADE cannot prevent guest code from copying a credential into persistent state,
 so the guest disk is always treated as potentially secret-bearing.
 
 Tokens are minted at start, and `ade refresh` mints the next generation into
-a running machine. If minting or validation
-fails, the working generation stays active and is not revoked.
+a running machine. Configuration is parsed and scoped before effects. The
+response must provide complete repository identities, permissions and a
+readable expiry before an installer can receive the token. If minting or
+validation fails, an existing working generation stays active.
+
+Boot failures trigger cleanup of the VM, dedicated agent and proxy. Cleanup
+failures are reported alongside the original failure; agent records are
+retained for retry when release fails.

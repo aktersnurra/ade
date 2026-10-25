@@ -161,10 +161,6 @@ let with_value ?reader t ~f =
   match reader t.source with
   | Error _ as error -> error
   | Ok value ->
-      (* The value is handed to f and then dropped. OCaml strings are
-         immutable, so it cannot be zeroed in place; what this signature buys is
-         that the credential never becomes a return value, so it cannot escape
-         into a caller, a log line or an error message. Scrubbing would need an
-         unsafe mutable buffer end to end, which is a larger change than the
-         leak this is guarding against. *)
+      (* The callback must keep the bytes out of diagnostics and retained state.
+         Its type encourages immediate use but cannot enforce non-escape. *)
       f value

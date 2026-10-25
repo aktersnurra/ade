@@ -1,4 +1,4 @@
-type mode = Populated | Empty
+type mode = With_identity of Secret.t | Empty
 
 type t = { socket : string; pid : string; populated : bool }
 
@@ -59,16 +59,28 @@ let parse_agent_output output =
   | Some socket, Some pid -> Ok (socket, pid)
   | _ -> Error "could not read the agent's socket and pid from its output"
 
-let start ?runner ~paths ~name ~mode ~identity () =
-  ignore paths;
-  let* () =
-    match (mode, identity) with
-    | Populated, None ->
-        Error
-          (refused "start ssh agent"
-             "a populated agent needs a declared workbench identity")
-    | _ -> Ok ()
+let stop ?runner t =
+  let kill =
+    request "/usr/bin/ssh-agent" [ "-k" ]
+      [ ("SSH_AUTH_SOCK", t.socket); ("SSH_AGENT_PID", t.pid) ]
   in
+  match run ?runner kill with
+  | Error _ as error -> error
+  | Ok { Process_runner.status = 0; _ } ->
+      (try Sys.remove t.socket with Sys_error _ -> ());
+      Ok ()
+  | Ok { Process_runner.status; stderr; _ } ->
+      Error (Ade_error.Runtime_failed { argv = [ "ssh-agent"; "-k" ]; status; stderr })
+
+let record ~paths ~name agent =
+  let path = State_paths.ssh_agent_file paths name in
+  let* () = State_paths.ensure_dir (Filename.dirname path) in
+  let payload = Printf.sprintf "%s\n%s\n%b\n" agent.socket agent.pid agent.populated in
+  match Bos.OS.File.write ~mode:0o600 (Fpath.v path) payload with
+  | Ok () -> Ok ()
+  | Error (`Msg reason) -> Error (refused "record ssh agent" reason)
+
+let start ?runner ~paths ~name ~mode () =
   let* output =
     match run ?runner (request "/usr/bin/ssh-agent" [ "-s" ] []) with
     | Error _ as error -> error
@@ -88,10 +100,7 @@ let start ?runner ~paths ~name ~mode ~identity () =
      export helper runs in a guest ADE does not trust, and it must not be able
      to sign with the workbench's key. *)
   | Empty -> Ok agent
-  | Populated -> (
-      match identity with
-      | None -> Ok agent
-      | Some identity ->
+  | With_identity identity -> (
           let loaded =
             Secret.with_value identity ~f:(fun key_bytes ->
                 (* ssh-add reads the key on stdin, so it never becomes an
@@ -109,8 +118,16 @@ let start ?runner ~paths ~name ~mode ~identity () =
                          (Printf.sprintf "ssh-add exited with %d: %s" status
                             (String.trim stderr))))
           in
-          let* () = loaded in
-          Ok { agent with populated = true })
+          match loaded with
+          | Ok () -> Ok { agent with populated = true }
+          | Error cause -> (
+              match stop ?runner agent with
+              | Ok () -> Error cause
+              | Error cleanup ->
+                  (* Keep the handle recoverable when releasing it also fails. *)
+                  let cleanup = match record ~paths ~name agent with
+                    | Ok () -> [ cleanup ] | Error error -> [ cleanup; error ] in
+                  Error (Ade_error.Rollback_failed { cause; cleanup })))
 
 let loaded_identities ?runner t =
   let listing =
@@ -132,14 +149,4 @@ let loaded_identities ?runner t =
         (refused "list ssh identities"
            (Printf.sprintf "ssh-add exited with %d: %s" status (String.trim stderr)))
 
-let stop ?runner t =
-  let kill =
-    request "/usr/bin/ssh-agent" [ "-k" ]
-      [ ("SSH_AUTH_SOCK", t.socket); ("SSH_AGENT_PID", t.pid) ]
-  in
-  match run ?runner kill with
-  | Error _ as error -> error
-  | Ok _ ->
-      (* The socket outlives the process if the agent was killed abruptly. *)
-      (try if Sys.file_exists t.socket then Sys.remove t.socket with Sys_error _ -> ());
-      Ok ()
+
