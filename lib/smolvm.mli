@@ -18,7 +18,12 @@ val create :
   t -> Declaration.t -> mounts:Host_mount.resolved list -> (unit, Ade_error.t) result
 (** [mounts] are applied at creation only. A machine created before a mount was
     declared does not gain it until it is recreated. *)
-val start : ?ssh_auth_sock:string -> t -> Workbench_name.t -> (unit, Ade_error.t) result
+val start :
+  ?ssh_auth_sock:string -> ?egress_guard:Egress_guard.binding ->
+  t -> Workbench_name.t -> (unit, Ade_error.t) result
+(** A guard requires SmolVM's host-enforced mediated-egress v2 protocol.
+    Its token goes only to the host runtime environment; unsupported runtimes
+    fail rather than falling back to IP-only filtering. *)
 val stop : t -> Workbench_name.t -> (unit, Ade_error.t) result
 val delete : t -> Workbench_name.t -> (unit, Ade_error.t) result
 

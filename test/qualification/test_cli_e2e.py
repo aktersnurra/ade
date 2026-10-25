@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -59,9 +60,9 @@ class CliEndToEndTest(unittest.TestCase):
         wrapper.chmod(0o755)
         return wrapper
 
-    def ade(self, *args, cwd=None, declarations_env=True):
+    def ade(self, *args, cwd=None, declarations_env=True, smolvm=None):
         env = dict(os.environ)
-        env["ADE_SMOLVM_BIN"] = str(self.fake_runtime())
+        env["ADE_SMOLVM_BIN"] = str(smolvm or self.fake_runtime())
         env["ADE_STATE_ROOT"] = str(self.tmp / "state")
         env.pop("ADE_WORKBENCHES_DIR", None)
         if declarations_env:
@@ -214,7 +215,7 @@ class CliEndToEndTest(unittest.TestCase):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         text = (REPO_ROOT / "workbenches" / "work-proxied.toml.example").read_text()
-        text = text.replace('proxy = "127.0.0.1:3128"', f'proxy = "127.0.0.1:{port}"')
+        text = text.replace('proxy = "192.0.2.10:3128"', f'proxy = "127.0.0.1:{port}"')
         text = text.split("[network.classifier]")[0] + "[services]\nherdr = true\n"
         (self.declarations / "work-proxied.toml").write_text(text)
         return port
@@ -262,6 +263,133 @@ class CliEndToEndTest(unittest.TestCase):
         self.assertEqual(stopped.returncode, 0, msg=stopped.stderr)
         with self.assertRaises(OSError):
             self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+
+    def test_proxied_start_requires_an_authenticated_endpoint_guard(self):
+        port = self.proxied_declaration()
+        self.addCleanup(self.ade, "stop", "work-proxied")
+        started = self.ade("start", "work-proxied")
+        self.assertEqual(started.returncode, 0, msg=started.stderr)
+        starts = [line for line in self.calls() if line.startswith("machine start")]
+        self.assertTrue(starts)
+        self.assertTrue(all("--mediated-egress" in line for line in starts))
+        self.assertTrue(all("--egress-interceptor " in line for line in starts))
+        creates = [line for line in self.calls() if line.startswith("machine create")]
+        self.assertIn("--net-backend virtio-net", creates[0])
+
+        net = self.tmp / "state" / "workbenches" / "work-proxied" / "net"
+        binding_file = net / "guard.json"
+        binding = json.loads(binding_file.read_text())
+        self.assertEqual(binding_file.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(binding["token"], "\n".join(self.calls()))
+        self.assertNotIn(binding["token"], started.stdout + started.stderr)
+        address, guard_port = binding["address"].rsplit(":", 1)
+        self.assertEqual(address, "127.0.0.1")
+
+        def decide(ip, destination_port, token=None, payload=b"", magic=b"SMOLMEG2",
+                   identity=b"m" * 16, payload_length=None):
+            ip_bytes = socket.inet_pton(socket.AF_INET6 if ":" in ip else socket.AF_INET, ip)
+            prelude = (magic + bytes.fromhex(token or binding["token"])
+                       + identity + bytes(16)
+                       + struct.pack("!BH", 6 if ":" in ip else 4, destination_port)
+                       + ip_bytes + struct.pack("!H", len(payload) if payload_length is None else payload_length)
+                       + payload)
+            with socket.create_connection((address, int(guard_port)), timeout=5) as conn:
+                conn.sendall(prelude)
+                conn.shutdown(socket.SHUT_WR)
+                try:
+                    return conn.recv(1)
+                except ConnectionResetError:
+                    return b""
+
+        self.assertEqual(decide("127.0.0.1", port, payload=b"CONNECT example.com:443\r\n\r\n"), b"\x00")
+        self.assertEqual(decide("127.0.0.1", port, payload=b"x" * 8192), b"\x00")
+        for ip, other_port in [("127.0.0.1", port % 65535 + 1), ("127.0.0.1", int(guard_port)),
+                               ("127.0.0.2", port), ("1.1.1.1", 443), ("::1", port)]:
+            self.assertNotEqual(decide(ip, other_port), b"\x00", (ip, other_port))
+        for kwargs in [{"token": "00" * 32}, {"magic": b"SMOLMEG1"},
+                       {"identity": bytes(16)}, {"payload_length": 8193},
+                       {"payload_length": 1}]:
+            self.assertNotEqual(decide("127.0.0.1", port, **kwargs), b"\x00", kwargs)
+
+        # Recovery must reuse the runtime's binding; silently rotating it would
+        # strand the running VM. A new VM start, in contrast, rotates it.
+        os.kill(int((net / "proxy.pid").read_text().strip()), 9)
+        again = self.ade("start", "work-proxied")
+        self.assertEqual(again.returncode, 0, msg=again.stderr)
+        self.assertEqual(json.loads(binding_file.read_text()), binding)
+        self.assertEqual(decide("127.0.0.1", port), b"\x00")
+        restarted = self.ade("restart", "work-proxied")
+        self.assertEqual(restarted.returncode, 0, msg=restarted.stderr)
+        self.assertNotEqual(json.loads(binding_file.read_text())["token"], binding["token"])
+        # Losing the binding must not mint a replacement for a running VM.
+        binding_file.write_text("broken")
+        os.kill(int((net / "proxy.pid").read_text().strip()), 9)
+        failed = self.ade("start", "work-proxied")
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("restart", failed.stderr)
+        self.assertEqual(binding_file.read_text(), "broken")
+
+    def test_unsupported_mediation_fails_without_an_unfiltered_boot(self):
+        port = self.proxied_declaration()
+        runtime = self.fake_runtime()
+        old_runtime = self.tmp / "old-smolvm"
+        old_runtime.write_text(
+            '#!/bin/sh\ncase " $* " in *" --mediated-egress "*) '
+            'echo "unsupported --mediated-egress" >&2; exit 2;; esac\n'
+            f'exec "{runtime}" "$@"\n'
+        )
+        old_runtime.chmod(0o755)
+        self.addCleanup(self.ade, "stop", "work-proxied")
+        failed = self.ade("start", "work-proxied", smolvm=old_runtime)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("unsupported --mediated-egress", failed.stderr)
+        self.assertEqual(self.machines().get("work-proxied"), "created")
+        net = self.tmp / "state" / "workbenches" / "work-proxied" / "net"
+        self.assertFalse((net / "mediated").exists())
+        binding = json.loads((net / "guard.json").read_text())
+        with self.assertRaises(OSError):
+            self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+        with self.assertRaises(OSError), socket.create_connection(
+            ("127.0.0.1", int(binding["address"].rsplit(":", 1)[1])), timeout=1
+        ):
+            pass
+
+    def test_running_proxied_machine_without_guard_is_not_adopted(self):
+        self.proxied_declaration()
+        self.state_file.write_text(json.dumps({"work-proxied": "running"}))
+        self.addCleanup(self.ade, "stop", "work-proxied")
+        result = self.ade("start", "work-proxied")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("restart", result.stderr)
+        self.assertFalse(any(line.startswith("machine exec") for line in self.calls()))
+
+    def test_revocation_overrides_session_wildcards_but_not_persistent_grants(self):
+        port = self.proxied_declaration()
+        self.addCleanup(self.ade, "stop", "work-proxied")
+        started = self.ade("start", "work-proxied")
+        self.assertEqual(started.returncode, 0, msg=started.stderr)
+        request = "CONNECT foo.localhost:443 HTTP/1.1\r\n\r\n"
+        self.assertEqual(self.ade("net", "allow", "work-proxied", "*.localhost").returncode, 0)
+        # A local address is never dialled, but a 502 (rather than 403) proves
+        # the host policy allowed the request through to the resolver.
+        self.assertTrue(self.request(port, request).startswith("HTTP/1.1 502"))
+        revoked = self.ade("net", "revoke", "work-proxied", "foo.localhost")
+        self.assertEqual(revoked.returncode, 0, msg=revoked.stderr)
+        self.assertTrue(self.request(port, request).startswith("HTTP/1.1 403"))
+        self.assertIn("foo.localhost:443", self.ade("net", "pending", "work-proxied").stdout)
+        self.assertTrue(self.request(port, request.replace("foo.", "bar.")).startswith("HTTP/1.1 502"))
+
+        self.assertEqual(self.ade("net", "allow", "work-proxied", "foo.localhost").returncode, 0)
+        self.assertTrue(self.request(port, request).startswith("HTTP/1.1 502"))
+        self.ade("net", "revoke", "work-proxied", "foo.localhost")
+        # Host-owned persistent policy remains authoritative, with an accurate
+        # warning even when that policy is a wildcard, not an exact name.
+        self.ade("net", "allow", "work-proxied", "*.localhost", "--always")
+        revoked = self.ade("net", "revoke", "work-proxied", "foo.localhost")
+        self.assertIn("stays allowed", revoked.stdout)
+        self.assertTrue(self.request(port, request).startswith("HTTP/1.1 502"))
+        (self.declarations / "work-proxied.allow").write_text("")
+        self.assertTrue(self.request(port, request).startswith("HTTP/1.1 403"))
 
     def test_net_commands_refuse_an_unproxied_workbench(self):
         result = self.ade("net", "pending", "work")

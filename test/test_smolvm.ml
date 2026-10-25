@@ -100,7 +100,9 @@ let proxied_declaration_reaches_only_its_proxy () =
       let argv = Smolvm.create_argv declaration ~mounts:[] in
       Alcotest.(check bool) "--net" true (List.mem "--net" argv);
       Alcotest.(check bool) "no allow-host" false (List.mem "--allow-host" argv);
-      Alcotest.(check (list string)) "one cidr" [ "127.0.0.1/32" ]
+      Alcotest.(check bool) "host mediation backend" true (List.mem "virtio-net" argv);
+      Alcotest.(check bool) "explicit backend" true (List.mem "--net-backend" argv);
+      Alcotest.(check (list string)) "one cidr" [ "192.0.2.10/32" ]
         (let rec cidrs = function
            | "--allow-cidr" :: cidr :: rest -> cidr :: cidrs rest
            | _ :: rest -> cidrs rest
@@ -226,6 +228,32 @@ let attach_with_a_command_execs_on_a_terminal () =
     [ "machine"; "exec"; "-i"; "-t"; "--name"; "work"; "--"; "herdr" ]
     (only_argv recorder)
 
+let guard_token_is_only_in_the_host_start_environment () =
+  let binding, socket =
+    match Egress_guard.listen ~proxy:"127.0.0.1:3128" () with
+    | Ok pair -> pair
+    | Error reason -> Alcotest.fail reason
+  in
+  Fun.protect ~finally:(fun () -> Unix.close socket) (fun () ->
+      let recorder = ref [] in
+      let smolvm = adapter (fake recorder) in
+      (match Smolvm.start ~egress_guard:binding smolvm (name_exn "work") with
+       | Error error -> Alcotest.fail (Ade_error.to_string error)
+       | Ok () -> ());
+      let request = List.hd !recorder in
+      Alcotest.(check bool) "mediation required" true
+        (List.mem "--mediated-egress" request.Process_runner.argv);
+      Alcotest.(check bool) "bound listener" true
+        (List.mem (Egress_guard.address binding) request.Process_runner.argv);
+      Alcotest.(check bool) "token absent from argv" false
+        (List.mem (Egress_guard.token_hex binding) request.Process_runner.argv);
+      Alcotest.(check (option string)) "host token"
+        (Some (Egress_guard.token_hex binding))
+        (List.assoc_opt "SMOLVM_INTERCEPTOR_TOKEN" request.Process_runner.env);
+      ignore (Smolvm.exec smolvm (name_exn "work") [ "env" ]);
+      Alcotest.(check bool) "exec gets no mediation token" false
+        (List.mem_assoc "SMOLVM_INTERCEPTOR_TOKEN" (List.hd !recorder).Process_runner.env))
+
 let failure_status_is_reported () =
   let recorder = ref [] in
   let smolvm = adapter (fake ~status:2 ~stderr:"boom" recorder) in
@@ -259,6 +287,7 @@ let () =
         [ Alcotest.test_case "attach inherits" `Quick attach_inherits_the_terminal;
           Alcotest.test_case "exec captures" `Quick exec_captures_output;
           Alcotest.test_case "ssh socket" `Quick ssh_socket_never_reaches_argv;
+          Alcotest.test_case "guard token" `Quick guard_token_is_only_in_the_host_start_environment;
           Alcotest.test_case "failure" `Quick failure_status_is_reported;
           Alcotest.test_case "stdin needs -i" `Quick piped_stdin_keeps_stdin_open;
           Alcotest.test_case "delete forced" `Quick delete_is_forced;

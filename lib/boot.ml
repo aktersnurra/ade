@@ -9,7 +9,7 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
-  start_proxy : Declaration.t -> (unit, Ade_error.t) result;
+  start_proxy : Declaration.t -> (Egress_guard.binding option, Ade_error.t) result;
   ensure_proxy : Declaration.t -> (unit, Ade_error.t) result;
   stop_proxy : Workbench_name.t -> (unit, Ade_error.t) result;
 }
@@ -159,14 +159,19 @@ let start ~services ~smolvm ~paths ~name ~purpose declaration =
   | Error error ->
       undo ();
       Error error
-  | Ok () -> (
+  | Ok egress_guard -> (
       let ssh_auth_sock = Option.map Ssh_agent.socket_path agent in
-      match Smolvm.start ?ssh_auth_sock smolvm name with
+      match Smolvm.start ?ssh_auth_sock ?egress_guard smolvm name with
       | Error error ->
           undo ();
           Error error
       | Ok () -> (
           let configured =
+            let* () =
+              match egress_guard with
+              | None -> Ok ()
+              | Some _ -> Net.mark_started ~paths name
+            in
             let* () = Net.configure_guest ~smolvm ~name declaration in
             match purpose with
             | Maintenance -> Ok ()

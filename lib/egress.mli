@@ -9,6 +9,8 @@
 type target = { host : string; port : int }
 
 val render_target : target -> string
+val render_allow_argument : target -> string
+(** The approval argument: bare host for web ports, host:port otherwise. *)
 
 val valid_host : string -> bool
 (** Lowercase DNS syntax only: letters, digits, dots and hyphens. *)
@@ -21,6 +23,9 @@ type pattern
 val parse_pattern : string -> (pattern, string) result
 (** ["host"] allows ports 443 and 80, ["host:port"] only that port, and
     ["*.suffix"] any name strictly below the suffix. *)
+
+val matches_host : pattern -> string -> bool
+(** Match a normalized host independently of ports, for host-wide revocation. *)
 
 val allowed : pattern list -> target -> bool
 

@@ -61,8 +61,15 @@ boundary, and the proxied posture is the one to use.
 
 ### The proxy
 
+Requires Linux/macOS and a SmolVM build with virtio-net and mediated-egress
+v2. Verify `smolvm machine start --help` lists `--mediated-egress` and
+`--egress-interceptor`; unsupported runtimes must fail, not boot with only
+the CIDR rule.
+
 Copy `workbenches/work-proxied.toml.example` to `smoke-proxy.toml` (rename
-`name`, drop the classifier for now) and:
+`name`, drop the classifier for now). Replace the documentation-only
+`192.0.2.10` with an actual host IPv4 that the guest can reach and the host
+can bind. Do not use guest loopback. Then:
 
 ```sh
 ade create smoke-proxy && ade start smoke-proxy
@@ -73,10 +80,27 @@ ade exec smoke-proxy -- curl -sS -m 5 --noproxy '*' https://github.com   # must 
 ade net pending smoke-proxy                                       # example.com listed
 ```
 
-If the guest cannot reach `127.0.0.1:PORT`, set `network.proxy` to the host
-address `ip route` shows (the proxy listens on the same address), recreate, and
-note which one worked. The `--noproxy` line is the one that matters: a direct
-connection must not get out.
+Both guest reachability and host-side isolation must be checked. The tests
+against the fake runtime exercise the real guard's protocol, not SmolVM's
+enforcement. In particular:
+
+1. Start a second proxied workbench on the **same host IP, another port**, with
+   `example.com` allowed only there. From `smoke-proxy`, explicitly select that
+   other proxy with `curl --proxy http://HOST:OTHER_PORT --noproxy '' -m 5
+   https://example.com`. It must fail before reaching the other proxy. Using
+   `smoke-proxy`'s own proxy must still work for `github.com`.
+2. A direct TCP connection to another listening host port must also fail.
+   Repeat with proxy variables unset; environment settings are not enforcement.
+3. Kill the proxy daemon (PID in ADE's `workbenches/smoke-proxy/net/proxy.pid`).
+   Networking must fail closed. `ade start smoke-proxy` must restore access
+   without changing `net/guard.json` or rebooting the VM. Do not print that
+   file: it contains the host authentication token.
+4. `ade restart smoke-proxy` must rotate the binding. Stop must close both
+   the proxy and guard listeners.
+
+If the selected address is unreachable, choose another host-assigned address
+and recreate the machine, noting which one worked. If another proxy or host
+port is reachable, stop the workbench: the host isolation check has failed.
 
 ## 4. Identity and credentials (optional, needs setup)
 

@@ -12,7 +12,7 @@ type decision = Pass | Refuse of string option  (** the reason the agent is told
 
 type config = {
   workbench : string;
-  policy : unit -> Egress.pattern list;  (** read for every request *)
+  is_allowed : Egress.target -> bool;  (** live policy, including revocations *)
   decide : Egress.target -> decision;
       (** for a destination no pattern allows; it may take a while, holding
           only that client's connection *)

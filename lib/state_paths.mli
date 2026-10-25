@@ -43,6 +43,12 @@ val proxy_pid_file : t -> Workbench_name.t -> string
 
 val proxy_output_file : t -> Workbench_name.t -> string
 
+val guard_file : t -> Workbench_name.t -> string
+(** Host-only authenticated egress binding, mode 0600. Never mounted in the guest. *)
+
+val mediated_file : t -> Workbench_name.t -> string
+(** Records a successful mediated boot; absent for pre-guard running machines. *)
+
 val auto_allow_file : t -> Workbench_name.t -> string
 (** Exact [host:port]s the classifier allowed, until the workbench next starts. *)
 

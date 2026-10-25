@@ -249,10 +249,6 @@ let clock time =
   Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1)
     tm.Unix.tm_mday tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
 
-(* What to type to allow a target: the bare host covers the web ports. *)
-let allow_argument (target : Egress.target) =
-  if target.port = 443 || target.port = 80 then target.host else Egress.render_target target
-
 let net_command =
   let open Cmdliner in
   let with_net name action =
@@ -281,7 +277,7 @@ let net_command =
                        | Some (_, "") | None -> ()
                        | Some (_, reason) -> Printf.printf "  needs you: %s\n" reason);
                       Printf.printf "  allow with: ade net allow %s %s [--always]\n" name
-                        (allow_argument entry.target))
+                        (Egress.render_allow_argument entry.target))
                     entries)
             (Net.pending ~paths declaration))
     in

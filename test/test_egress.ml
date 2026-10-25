@@ -78,6 +78,21 @@ let blocked_response_explains () =
   in
   Alcotest.(check bool) "tells the command" true (contains "ade net allow work example.com")
 
+let blocked_approval_allows_the_requested_port () =
+  List.iter
+    (fun port ->
+      let requested = target "example.com" port in
+      let response = Egress.blocked_response ~workbench:"work" requested in
+      let prefix = "  ade net allow work " in
+      let command = List.find (String.starts_with ~prefix) (String.split_on_char '\n' response) in
+      let argument = String.sub command (String.length prefix) (String.length command - String.length prefix) in
+      Alcotest.(check bool) "suggested approval matches the blocked target" true
+        (Egress.allowed (patterns [ argument ]) requested);
+      if port <> 80 && port <> 443 then
+        Alcotest.(check bool) "non-web approval does not grant web ports" false
+          (Egress.allowed (patterns [ argument ]) (target "example.com" 443)))
+    [ 80; 443; 22; 8443; 65535 ]
+
 let unusual_shapes () =
   let shaped host = Egress.unusual_shape (target host 443) <> None in
   List.iter (fun h -> Alcotest.(check bool) h true (shaped h))
@@ -188,6 +203,7 @@ let () =
           Alcotest.test_case "plain http" `Quick rewrites_plain_http;
           Alcotest.test_case "others" `Quick refuses_other_requests;
           Alcotest.test_case "blocked response" `Quick blocked_response_explains;
+          Alcotest.test_case "approval port" `Quick blocked_approval_allows_the_requested_port;
           Alcotest.test_case "blocked reason" `Quick blocked_response_gives_the_reason;
           Alcotest.test_case "unusual shapes" `Quick unusual_shapes;
           Alcotest.test_case "sanitize" `Quick sanitize_strips_control ] );
