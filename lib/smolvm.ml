@@ -1,4 +1,4 @@
-type state = Absent | Created | Stopped | Running
+type state = Absent | Created | Stopped | Running | Booting | Stopping | Failed of string
 
 type t = { executable : string; runner : Process_runner.t }
 
@@ -35,15 +35,14 @@ let succeeded t argv =
       Error
         (Ade_error.Runtime_failed { argv = t.executable :: argv; status; stderr })
 
-(* SmolVM reports more states than ADE acts on. Booting and stopping are
-   transient views of a machine that exists and is not yet usable; ADE maps them
-   onto the nearest settled state rather than inventing a fifth variant. A
-   failed machine exists but must not be treated as running. *)
+(* Observations must not claim readiness or shutdown before the runtime does. *)
 let parse_state = function
   | "created" -> Ok Created
-  | "booting" | "ready" | "running" -> Ok Running
-  | "stopping" | "stopped" -> Ok Stopped
-  | other when String.length other >= 6 && String.sub other 0 6 = "failed" -> Ok Stopped
+  | "ready" | "running" -> Ok Running
+  | "booting" -> Ok Booting
+  | "stopping" -> Ok Stopping
+  | "stopped" -> Ok Stopped
+  | other when other = "failed" || String.starts_with ~prefix:"failed:" other -> Ok (Failed other)
   | other -> Error ("unrecognized machine state " ^ Filename.quote other)
 
 let state t name =
@@ -70,7 +69,9 @@ let state t name =
         | exception Yojson.Json_error reason ->
             Error (Ade_error.Runtime_output_invalid { context = "machine status"; reason })
         | json -> (
-            match Yojson.Safe.Util.member "state" json with
+            match (match json with
+                   | `Assoc fields -> Option.value (List.assoc_opt "state" fields) ~default:`Null
+                   | _ -> `Null) with
             | `String value -> (
                 match parse_state value with
                 | Ok state -> Ok state

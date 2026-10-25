@@ -49,13 +49,14 @@ let socket_file () =
 let services world =
   {
     Boot.start_agent =
-      (fun ~name:_ ~mode ~identity ->
+      (fun ~name:_ ~mode ->
         world.agent_mode <- Some mode;
-        world.agent_identity <- Option.map Secret.describe identity;
+        world.agent_identity <- (match mode with Ssh_agent.Empty -> None
+          | Ssh_agent.With_identity identity -> Some (Secret.describe identity));
         note world "agent start";
         Ok
           (Ssh_agent.of_record ~socket:(socket_file ()) ~pid:"4242"
-             ~populated:(mode = Ssh_agent.Populated)));
+             ~populated:(match mode with Ssh_agent.Empty -> false | Ssh_agent.With_identity _ -> true)));
     stop_agent =
       (fun _ ->
         note world "agent stop";
@@ -128,7 +129,7 @@ let setup () =
 let name declaration = Declaration.name declaration
 
 let start ?(purpose = Boot.Work) world smolvm paths declaration =
-  Boot.start ~services:(services world) ~smolvm ~paths ~name:(name declaration) ~purpose
+  Boot.start ~services:(services world) ~smolvm ~paths ~purpose
     declaration
 
 let record_exists paths declaration =
@@ -151,7 +152,7 @@ let work_start_orders_agent_boot_credentials () =
   let declaration = with_agent () in
   expect_ok "start" (start world smolvm paths declaration);
   Alcotest.check log "order" [ "agent start"; "machine start"; "credentials" ] (events world);
-  Alcotest.(check bool) "populated" true (world.agent_mode = Some Ssh_agent.Populated);
+  Alcotest.(check bool) "populated" true (match world.agent_mode with Some (Ssh_agent.With_identity _) -> true | _ -> false);
   Alcotest.(check (option string)) "declared identity" (Some "pass entry ade/work-ssh")
     world.agent_identity;
   Alcotest.(check bool) "socket forwarded" true (List.mem_assoc "SSH_AUTH_SOCK" world.start_env);
@@ -179,7 +180,7 @@ let failed_boot_stops_the_agent () =
   let declaration = with_agent () in
   world.fail_start <- true;
   expect_error "start" (start world smolvm paths declaration);
-  Alcotest.check log "undone" [ "agent start"; "machine start"; "agent stop" ] (events world);
+  Alcotest.check log "undone" [ "agent start"; "machine start"; "machine stop"; "agent stop" ] (events world);
   Alcotest.(check bool) "forgotten" false (record_exists paths declaration)
 
 (* Without its credentials the workbench is not what was declared, so it is
@@ -245,6 +246,73 @@ let unproxied_start_writes_no_proxy_config () =
   expect_ok "start" (start world smolvm paths (without_agent ()));
   Alcotest.check log "order" [ "machine start"; "credentials" ] (events world)
 
+let failed_agent_release_keeps_recovery_record () =
+  let world, smolvm, paths = setup () in
+  let declaration = with_agent () in
+  expect_ok "start" (start world smolvm paths declaration);
+  let services = { (services world) with stop_agent = (fun _ ->
+      Error (Ade_error.Operation_refused { operation = "stop agent"; reason = "busy" })) } in
+  expect_error "release" (Boot.release_agent ~services ~paths (name declaration));
+  Alcotest.(check bool) "record retained" true (record_exists paths declaration)
+
+let failed_rollback_reports_both_causes () =
+  let world, _, paths = setup () in
+  let declaration = with_agent () in
+  world.fail_credentials <- true;
+  let smolvm = Smolvm.make ~executable:"fake" ~runner:(fun request ->
+      match request.Process_runner.argv with
+      | "machine" :: "stop" :: _ ->
+          Ok { Process_runner.status = 1; stdout = ""; stderr = "stop failed" }
+      | _ -> runner world request) in
+  match start world smolvm paths declaration with
+  | Ok () -> Alcotest.fail "expected failure"
+  | Error error ->
+      let message = Ade_error.to_string error in
+      Alcotest.(check bool) "both causes" true
+        (String.length message > String.length "credentials refused: boom"
+         && String.contains message '1')
+
+let failure_paths_preserve_recovery_evidence () =
+  Hegel.run_hegel_test ~database_key:"boot-ownership" (fun tc ->
+      let fail_start = Hegel.draw ~label:"fail_start" tc (Hegel.Generators.booleans ()) in
+      let fail_credentials = Hegel.draw ~label:"fail_credentials" tc (Hegel.Generators.booleans ()) in
+      let fail_vm_stop = Hegel.draw ~label:"fail_vm_stop" tc (Hegel.Generators.booleans ()) in
+      let fail_agent_stop = Hegel.draw ~label:"fail_agent_stop" tc (Hegel.Generators.booleans ()) in
+      let vm_live = ref false and agent_live = ref false in
+      let socket = socket_file () in
+      let paths = State_paths.make ~root:(temp_root ()) () in
+      let declaration = with_agent () in
+      let error reason = Error (Ade_error.Operation_refused { operation = "probe"; reason }) in
+      let services = {
+        Boot.start_agent = (fun ~name:_ ~mode:_ -> agent_live := true;
+          Ok (Ssh_agent.of_record ~socket ~pid:"4242" ~populated:true));
+        stop_agent = (fun _ -> if fail_agent_stop then error "agent stop"
+          else (agent_live := false; Ok ()));
+        install_credentials = (fun ~smolvm:_ ~name:_ _ ->
+          if fail_credentials then error "credentials" else Ok ());
+        start_proxy = (fun _ -> Ok None);
+        ensure_proxy = (fun _ -> Ok ());
+        stop_proxy = (fun _ -> Ok ()) } in
+      let smolvm = Smolvm.make ~executable:"fake" ~runner:(fun request ->
+          match request.Process_runner.argv with
+          | "machine" :: "start" :: _ ->
+              if fail_start then error "start" else (vm_live := true; ok)
+          | "machine" :: "stop" :: _ ->
+              if fail_vm_stop then error "vm stop" else (vm_live := false; ok)
+          | _ -> ok) in
+      Fun.protect ~finally:(fun () ->
+          Sys.remove socket;
+          ignore (Bos.OS.Dir.delete ~recurse:true (Fpath.v (State_paths.root paths)));
+          Sys.remove (Declaration.path declaration)) (fun () ->
+          let result = Boot.start ~services ~smolvm ~paths ~purpose:Boot.Work declaration in
+          Hegel.require tc (Result.is_error result = (fail_start || fail_credentials));
+          match result with
+          | Ok () -> Hegel.require tc (!vm_live && !agent_live)
+          | Error error ->
+              if !agent_live then Hegel.require tc (record_exists paths declaration);
+              if !agent_live || !vm_live then
+                Hegel.require tc (match error with Ade_error.Rollback_failed _ -> true | _ -> false)))
+
 let () =
   Alcotest.run "boot"
     [
@@ -257,7 +325,10 @@ let () =
           Alcotest.test_case "proxied" `Quick proxied_start_runs_the_proxy_first;
           Alcotest.test_case "not proxied" `Quick unproxied_start_writes_no_proxy_config ] );
       ( "rollback",
-        [ Alcotest.test_case "boot fails" `Quick failed_boot_stops_the_agent;
+        [ Alcotest.test_case "ownership property" `Quick failure_paths_preserve_recovery_evidence;
+          Alcotest.test_case "release keeps record" `Quick failed_agent_release_keeps_recovery_record;
+          Alcotest.test_case "rollback failures" `Quick failed_rollback_reports_both_causes;
+          Alcotest.test_case "boot fails" `Quick failed_boot_stops_the_agent;
           Alcotest.test_case "credentials fail" `Quick failed_credentials_stop_machine_and_agent ] );
       ( "stop", [ Alcotest.test_case "order" `Quick stop_halts_machine_then_agent ] );
     ]

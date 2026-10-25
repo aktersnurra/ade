@@ -297,13 +297,54 @@ let proxied_hosts_are_not_drift () =
   in
   Alcotest.(check bool) "same shape" true (shape proxied_network = shape edited)
 
+let load_for_property text =
+  let path = write_temp text in
+  Fun.protect ~finally:(fun () -> Sys.remove path) (fun () -> Declaration.load path)
+
+let declaration_identity_tracks_credential_scope () =
+  Hegel.run_hegel_test ~database_key:"declaration-credential-identity" (fun tc ->
+      let repo = Hegel.draw ~label:"repository" tc
+          (Hegel.Generators.text ~alphabet:"abcdefghijklmnopqrstuvwxyz" ~min_size:1 ()) in
+      let with_repo repo = valid_toml ^ Printf.sprintf
+          "\n[credentials.github]\napp_id = \"1\"\ninstallation_id = \"2\"\nprivate_key_path = \"file:/unused\"\nrepositories = [%S]\npermissions = { contents = \"read\" }\n"
+          ("owner/" ^ repo) in
+      let before = Result.get_ok (load_for_property (with_repo repo)) in
+      let after = Result.get_ok (load_for_property (with_repo ("changed-" ^ repo))) in
+      Hegel.require tc ~msg:"credential scope is part of declaration identity"
+        (Declaration.digest_hex before <> Declaration.digest_hex after))
+
+let allowlist_order_does_not_change_identity () =
+  Hegel.run_hegel_test ~database_key:"declaration-order" (fun tc ->
+      let hosts = Hegel.draw ~label:"hosts" tc
+          (Hegel.Generators.lists (Hegel.Generators.text ~alphabet:"abcdefghijklmnopqrstuvwxyz" ~min_size:1 ()) ()) in
+      let render hosts = replace_line ~find:{|hosts = ["github.com", "api.github.com"]|}
+          ~replace:("hosts = " ^ Yojson.Safe.to_string (`List (List.map (fun host -> `String (host ^ ".example")) hosts)))
+          valid_toml in
+      let digest hosts = Declaration.digest_hex (Result.get_ok (load_for_property (render hosts))) in
+      Hegel.require tc (digest hosts = digest (List.rev hosts)))
+
+let clone_identity_uniqueness_is_enforced () =
+  Hegel.run_hegel_test ~database_key:"clone-identities" (fun tc ->
+      let names = Hegel.draw ~label:"clones" tc
+          (Hegel.Generators.lists (Hegel.Generators.text ~alphabet:"ab" ~min_size:1 ()) ()) in
+      let mounts = List.mapi (fun i name -> mount_table ~host:("/source/" ^ name)
+          ~guest:("/src/repo-" ^ string_of_int i) ~mode:"clone" ()) names |> String.concat "\n" in
+      let result = load_for_property (with_mounts mounts) in
+      Hegel.require tc (Result.is_ok result =
+        (List.length names = List.length (List.sort_uniq String.compare names))))
+
 let () =
   Alcotest.run "declaration"
     [ ( "valid",
-        [ Alcotest.test_case "loads" `Quick loads_valid;
+        [ Alcotest.test_case "credential identity property" `Quick declaration_identity_tracks_credential_scope;
+          Alcotest.test_case "allowlist order property" `Quick allowlist_order_does_not_change_identity;
+          Alcotest.test_case "clone identity property" `Quick clone_identity_uniqueness_is_enforced;
+          Alcotest.test_case "loads" `Quick loads_valid;
           Alcotest.test_case "digest" `Quick digest_is_stable_and_sensitive ] );
       ( "invalid",
-        [ Alcotest.test_case "missing file" `Quick missing_file;
+        [ Alcotest.test_case "credential schema" `Quick
+            (rejects "credentials.github" (valid_toml ^ "\n[credentials.github]\ntypo = true\n"));
+          Alcotest.test_case "missing file" `Quick missing_file;
           Alcotest.test_case "unknown key" `Quick
             (rejects "unknown" (valid_toml ^ "\nsurprise = true\n"));
           Alcotest.test_case "malformed digest" `Quick
@@ -371,7 +412,11 @@ proxy = "127.0.0.1:3128"|} valid_toml));
           Alcotest.test_case "no provision" `Quick provision_is_optional;
           Alcotest.test_case "provision moves the digest" `Quick provision_changes_the_digest ] );
       ( "clone mounts",
-        [ Alcotest.test_case "default guest" `Quick clone_mount_defaults_its_guest_path;
+        [ Alcotest.test_case "unique clone identities" `Quick
+            (rejects "duplicate clone"
+               (with_mounts (mount_table ~host:"/one/repo" ~guest:"/src/one" ~mode:"clone" ()
+                           ^ mount_table ~host:"/two/repo" ~guest:"/src/two" ~mode:"clone" ())));
+          Alcotest.test_case "default guest" `Quick clone_mount_defaults_its_guest_path;
           Alcotest.test_case "named guest" `Quick clone_mount_may_name_its_guest_path;
           Alcotest.test_case "space in name" `Quick (clone_mount_names_are_conservative "/code/my repo");
           Alcotest.test_case "dotdot" `Quick (clone_mount_names_are_conservative "/code/..");

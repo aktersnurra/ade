@@ -6,71 +6,60 @@ let make ~services ~smolvm ~paths = { smolvm; paths; services }
 
 let ( let* ) = Result.bind
 
-(* The record is one "group<TAB>value" line per pair of the creation shape.
-   It names host paths but holds nothing secret. *)
-let render_shape shape =
-  String.concat "" (List.map (fun (group, value) -> group ^ "\t" ^ value ^ "\n") shape)
+type settled_state = Absent | Created | Stopped | Running
 
-let parse_shape text =
-  String.split_on_char '\n' text
-  |> List.filter_map (fun line ->
-         match String.index_opt line '\t' with
-         | Some tab -> Some (String.sub line 0 tab, String.sub line (tab + 1) (String.length line - tab - 1))
-         | None -> None)
+(* A successful observation refines the state available to lifecycle commands. *)
+let settle : Smolvm.state -> (settled_state, Ade_error.t) result = function
+  | Smolvm.Booting -> Error (Ade_error.Operation_refused
+      { operation = "transition workbench"; reason = "machine is booting; retry when settled" })
+  | Smolvm.Stopping -> Error (Ade_error.Operation_refused
+      { operation = "transition workbench"; reason = "machine is stopping; retry when settled" })
+  | Smolvm.Failed reason -> Error (Ade_error.Operation_refused
+      { operation = "transition workbench"; reason })
+  | Smolvm.Absent -> Ok Absent
+  | Smolvm.Created -> Ok Created
+  | Smolvm.Stopped -> Ok Stopped
+  | Smolvm.Running -> Ok Running
 
-let record_creation t declaration =
-  let name = Declaration.name declaration in
-  let* () = State_paths.ensure_dir (State_paths.workbench_dir t.paths name) in
-  let path = State_paths.created_file t.paths name in
-  (* Bos writes through a temporary file and renames, so a crash never leaves a
-     half-written record that would report false drift. *)
-  match
-    Bos.OS.File.write ~mode:0o600 (Fpath.v path) (render_shape (Declaration.creation_shape declaration))
-  with
-  | Ok () -> Ok ()
-  | Error (`Msg reason) -> Error (Ade_error.Operation_refused { operation = "record creation"; reason })
-
-(* Drift is reported, never silently repaired: ADE does not mutate a machine to
-   resolve a mismatch with the declaration, because what differs (mounts,
-   resources, network) is fixed at creation and changing it means recreating
-   the machine, which destroys its workspace. A machine with no record, created
-   before records existed or outside ADE, is not compared. *)
-let drift_of t declaration =
-  let name = Declaration.name declaration in
+let observe_settled t name =
   let* state = Smolvm.state t.smolvm name in
+  settle state
+
+type drift = Not_created | Matches | Unknown of string | Drifted of string list
+
+let describe_drift = function
+  | Not_created | Matches -> None
+  | Unknown reason -> Some ("creation state unknown: " ^ reason)
+  | Drifted groups -> Some (Printf.sprintf
+      "%s changed since the machine was created; these apply only at creation, so they take effect after ade rm and ade create"
+      (String.concat ", " groups))
+
+let drift_of t declaration state =
   match state with
-  | Smolvm.Absent -> Ok None
+  | Smolvm.Absent -> Not_created
   | _ -> (
-      match In_channel.with_open_bin (State_paths.created_file t.paths name) In_channel.input_all with
-      | exception Sys_error _ -> Ok None
-      | text ->
-          let recorded = parse_shape text in
-          let current = Declaration.creation_shape declaration in
-          let values group shape =
-            List.sort String.compare
-              (List.filter_map (fun (g, v) -> if g = group then Some v else None) shape)
-          in
-          let changed =
-            List.filter
-              (fun group -> values group recorded <> values group current)
-              [ "image"; "resources"; "network"; "ssh"; "mounts" ]
-          in
-          if changed = [] then Ok None
-          else
-            Ok
-              (Some
-                 (Printf.sprintf
-                    "%s changed since the machine was created; these apply only at \
-                     creation, so they take effect after ade rm and ade create"
-                    (String.concat ", " changed))))
+      match Creation_manifest.load ~paths:t.paths (Declaration.name declaration) with
+      | Error error -> Unknown (Ade_error.to_string error)
+      | Ok None -> Unknown "no creation manifest; inspect the machine before recreating it"
+      | Ok (Some recorded) -> (
+          match Host_mount.for_declaration ~paths:t.paths declaration with
+          | Error error -> Unknown (Ade_error.to_string error)
+          | Ok mounts ->
+              let current = Creation_manifest.make declaration mounts in
+              match Creation_manifest.changes ~recorded ~current with
+              | [] -> Matches
+              | groups -> Drifted groups))
 
 (* Mounts are resolved immediately before creation, on the host that will run
    the machine, so a symlink swapped after the declaration was written is
    still caught. *)
 let create_machine t declaration =
   let* mounts = Host_mount.for_declaration ~paths:t.paths declaration in
+  let manifest = Creation_manifest.make declaration mounts in
+  let* () = if Creation_manifest.clones manifest = [] then Ok ()
+    else State_paths.ensure_dir (State_paths.outbox_dir t.paths (Declaration.name declaration)) in
   let* () = Smolvm.create t.smolvm declaration ~mounts in
-  record_creation t declaration
+  Creation_manifest.save ~paths:t.paths manifest
 
 let with_lock t declaration action =
   Workbench_lock.with_lock t.paths (Declaration.name declaration) action
@@ -89,15 +78,13 @@ let with_proxy_environment declaration command =
   | [] -> command
   | environment -> ("env" :: List.map (fun (key, value) -> key ^ "=" ^ value) environment) @ command
 
-(* The script runs under a Maintenance boot: the guest is installing software
-   from the network, so it holds neither the SSH identity nor credentials. The
-   machine is stopped whether or not the script succeeded, so a failure never
-   leaves a half-provisioned guest running with the agents' access. *)
+(* Maintenance boots hold no identity or credentials. Always attempt shutdown;
+   if it also fails, report both causes rather than claiming rollback completed. *)
 let run_provision t declaration script =
   let name = Declaration.name declaration in
   let* source = read_file script in
   let* () =
-    Boot.start ~services:t.services ~smolvm:t.smolvm ~paths:t.paths ~name
+    Boot.start ~services:t.services ~smolvm:t.smolvm ~paths:t.paths
       ~purpose:Boot.Maintenance declaration
   in
   let ran =
@@ -110,8 +97,10 @@ let run_provision t declaration script =
         Error (Ade_error.Runtime_failed { argv = [ "provision"; script ]; status; stderr })
   in
   let stopped = halt t name in
-  let* () = ran in
-  stopped
+  match ran, stopped with
+  | Ok (), result -> result
+  | Error cause, Ok () -> Error cause
+  | Error cause, Error cleanup -> Error (Ade_error.Rollback_failed { cause; cleanup = [ cleanup ] })
 
 (* A machine is only useful once provisioned, so creation and provisioning are
    one step; a failed script leaves the machine created and stopped for
@@ -125,17 +114,18 @@ let create_and_provision t declaration =
 let create t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
-      let* state = Smolvm.state t.smolvm name in
+      let* observed = Smolvm.state t.smolvm name in
+      let* state = settle observed in
       match state with
-      | Smolvm.Absent ->
+      | Absent ->
           let* () = create_and_provision t declaration in
           Ok Changed
-      | _ -> (
+      | Created | Stopped | Running -> (
           (* Creating an existing machine is a no-op when it matches, and a
              drift report otherwise. It never recreates the machine, because
              that would destroy the workspace. *)
-          let* drift = drift_of t declaration in
-          match drift with
+          let drift = drift_of t declaration observed in
+          match describe_drift drift with
           | None -> Ok Converged
           | Some reason ->
               Error
@@ -146,20 +136,20 @@ let create t declaration =
    a no-op after its state is confirmed. *)
 let boot t declaration =
   Boot.start ~services:t.services ~smolvm:t.smolvm ~paths:t.paths
-    ~name:(Declaration.name declaration) ~purpose:Boot.Work declaration
+    ~purpose:Boot.Work declaration
 
 let ensure_running t declaration =
   let name = Declaration.name declaration in
-  let* state = Smolvm.state t.smolvm name in
+  let* state = observe_settled t name in
   match state with
-  | Smolvm.Running ->
+  | Running ->
       (* A running machine whose proxy died has no network at all. *)
       let* () = t.services.ensure_proxy declaration in
       Ok Converged
-  | Smolvm.Created | Smolvm.Stopped ->
+  | Created | Stopped ->
       let* () = boot t declaration in
       Ok Changed
-  | Smolvm.Absent ->
+  | Absent ->
       let* () = create_and_provision t declaration in
       let* () = boot t declaration in
       Ok Changed
@@ -169,25 +159,25 @@ let start t declaration = with_lock t declaration (fun () -> ensure_running t de
 let stop t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
-      let* state = Smolvm.state t.smolvm name in
+      let* state = observe_settled t name in
       match state with
-      | Smolvm.Stopped | Smolvm.Created | Smolvm.Absent ->
+      | Stopped | Created | Absent ->
           (* The machine may have stopped without ADE; its agent must not
              outlive it. *)
           let* () = Boot.release ~services:t.services ~paths:t.paths name in
           Ok Converged
-      | Smolvm.Running ->
+      | Running ->
           let* () = halt t name in
           Ok Changed)
 
 let restart t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
-      let* state = Smolvm.state t.smolvm name in
+      let* state = observe_settled t name in
       let* () =
         match state with
-        | Smolvm.Running -> halt t name
-        | _ -> Ok ()
+        | Running -> halt t name
+        | Absent | Created | Stopped -> Ok ()
       in
       let* _ = ensure_running t declaration in
       Ok Changed)
@@ -201,17 +191,17 @@ let provision t declaration =
             (Ade_error.Operation_refused
                { operation = "provision"; reason = "the declaration names no provision script" })
       | Some script -> (
-          let* state = Smolvm.state t.smolvm name in
+          let* state = observe_settled t name in
           match state with
-          | Smolvm.Running ->
+          | Running ->
               Error
                 (Ade_error.Operation_refused
                    { operation = "provision";
                      reason = "the workbench is running; stop it first" })
-          | Smolvm.Absent ->
+          | Absent ->
               let* () = create_and_provision t declaration in
               Ok Changed
-          | Smolvm.Created | Smolvm.Stopped ->
+          | Created | Stopped ->
               let* () = run_provision t declaration script in
               Ok Changed))
 
@@ -221,35 +211,40 @@ let provision t declaration =
 let refresh t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
-      let* state = Smolvm.state t.smolvm name in
+      let* state = observe_settled t name in
       match state with
-      | Smolvm.Running when Declaration.github_credential declaration <> None ->
+      | Running when Declaration.github_credential declaration <> None ->
           let* () = t.services.install_credentials ~smolvm:t.smolvm ~name declaration in
           Ok Changed
-      | Smolvm.Running | Smolvm.Created | Smolvm.Stopped | Smolvm.Absent -> Ok Converged)
+      | Running | Created | Stopped | Absent -> Ok Converged)
 
 let pull t declaration ~repo =
-  let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
-  match Process_runner.find_executable "git" with
-  | None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
-  | Some git ->
-      Pull.run ~smolvm:t.smolvm ~runner:Process_runner.run ~git ~paths:t.paths declaration
-        ~repo
+  with_lock t declaration (fun () ->
+      let* _ = ensure_running t declaration in
+      let* recorded = Creation_manifest.load ~paths:t.paths (Declaration.name declaration) in
+      match recorded with
+      | None -> Error (Ade_error.Operation_refused
+          { operation = "pull"; reason = "no creation manifest; repository targets are unknown" })
+      | Some manifest -> (
+          match Process_runner.find_executable "git" with
+          | None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
+          | Some git -> Pull.run ~smolvm:t.smolvm ~runner:Process_runner.run ~git
+              ~paths:t.paths manifest ~repo))
 
 let remove t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
-      let* state = Smolvm.state t.smolvm name in
-      let* () = match state with Smolvm.Running -> halt t name | _ -> Ok () in
+      let* state = observe_settled t name in
+      let* () = match state with Running -> halt t name | Absent | Created | Stopped -> Ok () in
       let* () =
-        match state with Smolvm.Absent -> Ok () | _ -> Smolvm.delete t.smolvm name
+        match state with Absent -> Ok () | Created | Stopped | Running -> Smolvm.delete t.smolvm name
       in
       let* () = Boot.release ~services:t.services ~paths:t.paths name in
       let dir = State_paths.workbench_dir t.paths name in
       match Bos.OS.Dir.delete ~recurse:true (Fpath.v dir) with
       | Error (`Msg reason) ->
           Error (Ade_error.Operation_refused { operation = "rm"; reason })
-      | Ok () -> Ok (if state = Smolvm.Absent then Converged else Changed))
+      | Ok () -> Ok (if state = Absent then Converged else Changed))
 
 let attach t declaration ~command =
   (* The machine is brought up under the lock, but the lock is released before
@@ -269,10 +264,10 @@ let exec t declaration command =
   let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
   Smolvm.exec t.smolvm (Declaration.name declaration) (with_proxy_environment declaration command)
 
-type status = { name : string; state : Smolvm.state; drift : string option }
+type status = { name : string; state : Smolvm.state; drift : drift }
 
 let status t declaration =
   let name = Declaration.name declaration in
   let* state = Smolvm.state t.smolvm name in
-  let* drift = drift_of t declaration in
+  let drift = drift_of t declaration state in
   Ok { name = Workbench_name.to_string name; state; drift }

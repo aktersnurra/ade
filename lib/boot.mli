@@ -5,8 +5,8 @@
     runtime forwards the agent socket at start; and its declared credentials
     must be installed before anything in the guest depends on them.
 
-    Every step is undone if a later one fails, so a failed start leaves the
-    machine stopped and no agent running, and a retry starts clean. *)
+    Failed starts release acquired resources. Cleanup failures are reported
+    alongside the original cause; agent records remain available for retry. *)
 
 type purpose =
   | Work
@@ -21,7 +21,6 @@ type services = {
   start_agent :
     name:Workbench_name.t ->
     mode:Ssh_agent.mode ->
-    identity:Secret.t option ->
     (Ssh_agent.t, Ade_error.t) result;
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
@@ -46,13 +45,10 @@ val start :
   services:services ->
   smolvm:Smolvm.t ->
   paths:State_paths.t ->
-  name:Workbench_name.t ->
   purpose:purpose ->
   Declaration.t ->
   (unit, Ade_error.t) result
-(** Start the stopped machine [name] configured by the declaration.
-
-    [name] is passed separately from the declaration. *)
+(** Start the stopped machine named by the declaration. *)
 
 val stop :
   services:services ->

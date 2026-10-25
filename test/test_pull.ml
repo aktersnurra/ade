@@ -31,6 +31,7 @@ type world = {
   guest_clone : string;  (** stands in for /workspace/a inside the guest *)
   paths : State_paths.t;
   declaration : Declaration.t;
+  manifest : Creation_manifest.t;
   mutable guest_commands : string list list;
 }
 
@@ -76,8 +77,12 @@ mode = "clone"
     | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
   in
   let paths = State_paths.make ~root:(Filename.concat home ".local/state/ade") () in
+  let mounts = Result.get_ok (Host_mount.for_declaration ~paths declaration) in
+  let manifest = Creation_manifest.make declaration mounts in
+  mkdir_p (State_paths.outbox_dir paths (Declaration.name declaration));
+  Result.get_ok (Creation_manifest.save ~paths manifest);
   {
-    home; host_repo; guest_clone; paths; declaration; guest_commands = [];
+    home; host_repo; guest_clone; paths; declaration; manifest; guest_commands = [];
   }
 
 (* The guest command is `git -C /workspace/a bundle create /outbox/a.bundle
@@ -102,12 +107,12 @@ let runner world guest request =
            Ok { Process_runner.status = 0; stdout = ""; stderr = "" })
   | _ -> Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
 
-let pull ~repo world guest =
+let pull ?(host_runner = Process_runner.run) ~repo world guest =
   let smolvm =
     Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner world guest)
   in
-  Pull.run ~smolvm ~runner:Process_runner.run ~git:git_exe ~paths:world.paths
-    world.declaration ~repo
+  Pull.run ~smolvm ~runner:host_runner ~git:git_exe ~paths:world.paths
+    world.manifest ~repo
 
 let guest_commits_on_a_branch world =
   sh "cd %s && git checkout -q -b feature && %s git commit -q --allow-empty -m agent-work"
@@ -192,20 +197,82 @@ let a_file_that_is_not_a_bundle_is_refused () =
   in
   match
     Pull.run ~smolvm ~runner:Process_runner.run ~git:git_exe ~paths:world.paths
-      world.declaration ~repo:None
+      world.manifest ~repo:None
   with
   | Ok _ -> Alcotest.fail "expected a refusal"
   | Error _ ->
       Alcotest.(check string) "nothing fetched" "" (rev world "refs/remotes/agents/main")
 
+let replacing_the_outbox_after_verification_cannot_change_the_import () =
+  let world = make_world () in
+  guest_commits_on_a_branch world;
+  let host_runner request =
+    let result = Process_runner.run request in
+    if List.mem "verify" request.Process_runner.argv then (
+      let outbox = State_paths.outbox_dir world.paths (Declaration.name world.declaration) in
+      Out_channel.with_open_bin (Filename.concat outbox "a.bundle")
+        (fun ch -> Out_channel.output_string ch "replaced after verification"));
+    result in
+  match pull ~host_runner ~repo:None world Honest with
+  | Error error -> Alcotest.fail (Ade_error.to_string error)
+  | Ok _ -> Alcotest.(check bool) "verified branch imported" true
+      (rev world "refs/remotes/agents/feature" <> "")
+
+let lifecycle_pull world declaration =
+  let locked = ref false in
+  let smolvm = Smolvm.make ~executable:"fake" ~runner:(fun request ->
+      match request.Process_runner.argv with
+      | "machine" :: "status" :: _ ->
+          Ok { Process_runner.status = 0; stdout = {|{"state":"running"}|}; stderr = "" }
+      | _ ->
+          (match Workbench_lock.acquire world.paths (Declaration.name declaration) with
+           | Error _ -> locked := true
+           | Ok lock -> Workbench_lock.release lock);
+          runner world Honest request) in
+  let services = { Boot.start_agent = (fun ~name:_ ~mode:_ -> Alcotest.fail "unexpected agent");
+      stop_agent = (fun _ -> Ok ()); install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+      start_proxy = (fun _ -> Ok None); ensure_proxy = (fun _ -> Ok ()); stop_proxy = (fun _ -> Ok ()) } in
+  let lifecycle = Lifecycle.make ~services ~smolvm ~paths:world.paths in
+  (match Lifecycle.pull lifecycle declaration ~repo:None with
+   | Ok _ -> () | Error error -> Alcotest.fail (Ade_error.to_string error));
+  !locked
+
+let pull_holds_the_workbench_lock () =
+  let world = make_world () in
+  guest_commits_on_a_branch world;
+  Alcotest.(check bool) "locked during export" true (lifecycle_pull world world.declaration)
+
+let declaration_edits_cannot_redirect_an_existing_clone () =
+  let world = make_world () in
+  guest_commits_on_a_branch world;
+  let other = Filename.concat world.home "other/a" in
+  mkdir_p other;
+  sh "git -C %s init -q" other;
+  let path = Declaration.path world.declaration in
+  let original = In_channel.with_open_bin path In_channel.input_all in
+  let edited = String.split_on_char '\n' original |> List.map (fun line ->
+      if String.starts_with ~prefix:"host = " line then Printf.sprintf "host = %S" other else line)
+      |> String.concat "\n" in
+  Out_channel.with_open_bin path (fun ch -> Out_channel.output_string ch edited);
+  let declaration = Result.get_ok (Declaration.load path) in
+  ignore (lifecycle_pull world declaration);
+  Alcotest.(check bool) "original target receives branch" true
+    (rev world "refs/remotes/agents/feature" <> "");
+  Alcotest.(check string) "new target untouched" ""
+    (capture (Printf.sprintf "git -C %s rev-parse --verify -q refs/remotes/agents/feature" other))
+
 let () =
   Alcotest.run "pull"
     [ ( "pull",
-        [ Alcotest.test_case "branches arrive as agents/*" `Quick
+        [ Alcotest.test_case "serialized export" `Quick pull_holds_the_workbench_lock;
+          Alcotest.test_case "recorded target" `Quick declaration_edits_cannot_redirect_an_existing_clone;
+          Alcotest.test_case "branches arrive as agents/*" `Quick
             a_pull_brings_branches_back_without_touching_the_host_branches;
           Alcotest.test_case "named repository" `Quick a_named_repository_is_pulled;
           Alcotest.test_case "unknown repository" `Quick an_unknown_repository_is_refused;
           Alcotest.test_case "failing guest" `Quick a_failing_guest_bundle_is_an_error ] );
       ( "hostile outbox",
-        [ Alcotest.test_case "symlink" `Quick a_symlinked_bundle_is_refused;
+        [ Alcotest.test_case "stable artifact" `Quick
+            replacing_the_outbox_after_verification_cannot_change_the_import;
+          Alcotest.test_case "symlink" `Quick a_symlinked_bundle_is_refused;
           Alcotest.test_case "not a bundle" `Quick a_file_that_is_not_a_bundle_is_refused ] ) ]

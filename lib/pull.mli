@@ -16,8 +16,10 @@ val run :
   runner:Process_runner.t ->
   git:string ->
   paths:State_paths.t ->
-  Declaration.t ->
+  Creation_manifest.t ->
   repo:string option ->
   (string list, Ade_error.t) result
 (** Pull every clone mount, or just [repo]. The machine must be running. Returns
-    the names pulled. [git] is an absolute path. *)
+    the names pulled. [git] is an absolute path. Targets come only from the
+    recorded creation manifest, never a re-resolved declaration. The caller
+    holds the workbench lock for the entire export and import. *)

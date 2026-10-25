@@ -1,4 +1,6 @@
 type t =
+  | Github_failed of Github_error.t
+  | Rollback_failed of { cause : t; cleanup : t list }
   | Declaration_not_found of { path : string }
   | Declaration_invalid of { path : string; reason : string }
   | Workbench_name_invalid of { value : string; reason : string }
@@ -14,7 +16,10 @@ let render_argv = function
   | [ executable ] -> executable
   | executable :: subcommand :: _ -> executable ^ " " ^ subcommand
 
-let to_string = function
+let rec to_string = function
+  | Github_failed error -> Github_error.to_string error
+  | Rollback_failed { cause; cleanup } ->
+      to_string cause ^ "; cleanup failed: " ^ String.concat "; " (List.map to_string cleanup)
   | Declaration_not_found { path } -> "no workbench declaration at " ^ path
   | Declaration_invalid { path; reason } ->
       "invalid workbench declaration at " ^ path ^ ": " ^ reason

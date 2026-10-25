@@ -1,14 +1,9 @@
-(** Credentials that cannot be printed, and cannot be written into config.
+(** Secret locators, resolved only at effect boundaries.
 
-    Two separate guarantees, both enforced by this signature rather than by
-    discipline:
-
-    - A [t] names a source; it does not hold a value. There is no constructor
-      taking a credential, so a secret cannot be embedded in a declaration and
-      therefore cannot be committed.
-    - There is no accessor returning the value. The bytes exist only inside the
-      callback given to {!with_value}, so they cannot reach argv, a log line or
-      an error message. *)
+    A [t] holds a source rather than loaded bytes. [with_value] scopes ordinary
+    use, but its callback receives an OCaml string: it can retain, print or
+    return those bytes inside an error. Preventing such leaks is the caller's
+    responsibility, checked by transport and diagnostic tests, not this type. *)
 
 type t
 
@@ -51,13 +46,8 @@ val with_value :
   (unit, Ade_error.t) result
 (** Resolve the secret and pass it to [f].
 
-    [f] returns [unit] on success, not a value: were it polymorphic, a caller
-    could return the credential itself and defeat the point. Anything a caller
-    needs from the secret must be produced as an effect inside [f], such as
-    writing it to a process's stdin.
+    [f] returns [unit] on success to encourage immediate use, such as writing
+    to a process's stdin. It can still retain the string through effects.
 
-    The value is not zeroed after use. OCaml strings are immutable, so
-    scrubbing would require an unsafe mutable buffer through every reader; what
-    this signature guarantees is narrower and still worth having -- the
-    credential never becomes a return value, so it cannot reach a caller, a log
-    line, or an error message. *)
+    The value is not zeroed after use. This is a usage convention, not a
+    non-escape or information-flow guarantee. *)

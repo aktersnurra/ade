@@ -27,6 +27,9 @@ let state_case input expected () =
         | Smolvm.Created -> "created"
         | Smolvm.Stopped -> "stopped"
         | Smolvm.Running -> "running"
+        | Smolvm.Booting -> "booting"
+        | Smolvm.Stopping -> "stopping"
+        | Smolvm.Failed reason -> reason
       in
       Alcotest.(check string) input expected (render actual)
   | Error reason -> Alcotest.failf "%s: %s" input reason
@@ -122,10 +125,15 @@ let dedicated_ssh_requests_agent_forwarding () =
 
 (* Only resolved mounts reach the runtime, one --volume each, read-only marked. *)
 let create_argv_carries_resolved_mounts () =
-  let mounts =
-    [ { Host_mount.source = "/home/u/code/a"; guest = "/src/a"; read_only = true };
-      { Host_mount.source = "/home/u/data"; guest = "/work/data"; read_only = false } ]
-  in
+  let directory = Filename.temp_file "ade-mount-" "" in
+  Sys.remove directory; Unix.mkdir directory 0o700;
+  let source = Unix.realpath directory in
+  let policy = Host_mount.default_policy ~home:"/nonexistent/home"
+      ~state_root:"/nonexistent/state" ~declarations_dir:"/nonexistent/declarations" in
+  let resolve guest mode = Result.get_ok
+      (Host_mount.resolve policy { Declaration.host = source; guest; mode }) in
+  let mounts = [ resolve "/src/a" Declaration.Read_only;
+                 resolve "/work/data" Declaration.Read_write ] in
   let argv = Smolvm.create_argv (load_declaration ()) ~mounts in
   let rec volumes = function
     | "--volume" :: spec :: rest -> spec :: volumes rest
@@ -133,7 +141,8 @@ let create_argv_carries_resolved_mounts () =
     | [] -> []
   in
   Alcotest.(check (list string)) "volumes"
-    [ "/home/u/code/a:/src/a:ro"; "/home/u/data:/work/data" ] (volumes argv)
+    [ source ^ ":/src/a:ro"; source ^ ":/work/data" ] (volumes argv);
+  Unix.rmdir directory
 
 (* Attachment must hand over the terminal; capture would break interactivity. *)
 let attach_inherits_the_terminal () =
@@ -263,16 +272,35 @@ let failure_status_is_reported () =
   | Error error -> Alcotest.failf "unexpected error: %s" (Ade_error.to_string error)
   | Ok () -> Alcotest.fail "expected a nonzero status to be reported"
 
+let non_object_status_is_an_error () =
+  List.iter (fun stdout ->
+      let smolvm = adapter (fake ~stdout (ref [])) in
+      match Smolvm.state smolvm (name_exn "work") with
+      | Error (Ade_error.Runtime_output_invalid _) -> ()
+      | _ -> Alcotest.fail "expected structured invalid output") [ "[]"; "null"; "42" ]
+
+let status_decoding_is_total () =
+  Hegel.run_hegel_test ~database_key:"smolvm-status-total" (fun tc ->
+      let text = Hegel.draw ~label:"status" tc (Hegel.Generators.text ()) in
+      let body = Hegel.draw_silent tc (Hegel.Generators.sampled_from
+          [ text; Yojson.Safe.to_string (`String text);
+            Yojson.Safe.to_string (`Assoc [ "state", `String text ]);
+            Yojson.Safe.to_string (`Assoc [ "state", `List [ `String text ] ]) ]) in
+      let smolvm = adapter (fake ~stdout:body (ref [])) in
+      ignore (Smolvm.state smolvm (name_exn "work")))
+
 let () =
   Alcotest.run "smolvm"
     [ ( "state",
-        [ Alcotest.test_case "created" `Quick (state_case "created" "created");
+        [ Alcotest.test_case "total decoding property" `Quick status_decoding_is_total;
+          Alcotest.test_case "non-object" `Quick non_object_status_is_an_error;
+          Alcotest.test_case "created" `Quick (state_case "created" "created");
           Alcotest.test_case "running" `Quick (state_case "running" "running");
           Alcotest.test_case "ready" `Quick (state_case "ready" "running");
-          Alcotest.test_case "booting" `Quick (state_case "booting" "running");
+          Alcotest.test_case "booting" `Quick (state_case "booting" "booting");
           Alcotest.test_case "stopped" `Quick (state_case "stopped" "stopped");
-          Alcotest.test_case "stopping" `Quick (state_case "stopping" "stopped");
-          Alcotest.test_case "failed" `Quick (state_case "failed: boom" "stopped");
+          Alcotest.test_case "stopping" `Quick (state_case "stopping" "stopping");
+          Alcotest.test_case "failed" `Quick (state_case "failed: boom" "failed: boom");
           Alcotest.test_case "unknown" `Quick unknown_state_is_rejected;
           Alcotest.test_case "malformed json" `Quick malformed_json_is_reported;
           Alcotest.test_case "absent" `Quick missing_machine_is_absent;

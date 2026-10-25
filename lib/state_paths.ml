@@ -42,7 +42,9 @@ let rec ensure_dir path =
 let workbench_dir t name =
   Filename.concat (Filename.concat t.root "workbenches") (Workbench_name.to_string name)
 
-let lock_file t name = Filename.concat (workbench_dir t name) "lock"
+(* Locks outlive deletable workbench state: all contenders must open one inode. *)
+let lock_file t name =
+  Filename.concat (Filename.concat t.root "locks") (Workbench_name.to_string name ^ ".lock")
 let outbox_dir t name = Filename.concat (workbench_dir t name) "outbox"
 let ssh_agent_file t name = Filename.concat (workbench_dir t name) "ssh-agent"
 let created_file t name = Filename.concat (workbench_dir t name) "created"

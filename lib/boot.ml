@@ -4,7 +4,6 @@ type services = {
   start_agent :
     name:Workbench_name.t ->
     mode:Ssh_agent.mode ->
-    identity:Secret.t option ->
     (Ssh_agent.t, Ade_error.t) result;
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
@@ -21,12 +20,7 @@ let refused reason = Ade_error.Operation_refused { operation = "start"; reason }
 let install_github ~smolvm ~name declaration =
   match Declaration.github_credential declaration with
   | None -> Ok ()
-  | Some table ->
-      let* config =
-        Result.map_error
-          (fun error -> refused (Github_credential.describe_error error))
-          (Github_credential.load_config table)
-      in
+  | Some config ->
       (* Right after boot tmpfs is empty and this is the first generation; on
          a refresh of a running workbench it is the one after the active one.
          Only the number of the previous generation is used. *)
@@ -66,7 +60,7 @@ let install_credentials ~smolvm ~name declaration =
 let default_services ~paths =
   {
     start_agent =
-      (fun ~name ~mode ~identity -> Ssh_agent.start ~paths ~name ~mode ~identity ());
+      (fun ~name ~mode -> Ssh_agent.start ~paths ~name ~mode ());
     stop_agent = (fun agent -> Ssh_agent.stop agent);
     install_credentials;
     start_proxy = (fun declaration -> Net.start ~paths declaration);
@@ -116,29 +110,24 @@ let release_agent ~services ~paths name =
         services.stop_agent agent
     | Some _ | None -> Ok ()
   in
+  let* () = result in
   (try Sys.remove path with Sys_error _ -> ());
-  result
+  Ok ()
 
 let start_agent ~services ~paths ~name ~purpose declaration =
   match Declaration.ssh declaration with
   | Declaration.Disabled -> Ok None
   | Declaration.Dedicated_agent { key_ref } ->
-      let* mode, identity =
-        match purpose with
-        | Maintenance -> Ok (Ssh_agent.Empty, None)
-        | Work ->
-            Result.map
-              (fun identity -> (Ssh_agent.Populated, Some identity))
-              (Result.map_error
-                 (fun reason -> refused ("ssh.key_ref: " ^ reason))
-                 (Secret.of_reference key_ref))
-      in
-      let* agent = services.start_agent ~name ~mode ~identity in
+      let mode = match purpose with
+        | Maintenance -> Ssh_agent.Empty
+        | Work -> Ssh_agent.With_identity key_ref in
+      let* agent = services.start_agent ~name ~mode in
       (match write_record (State_paths.ssh_agent_file paths name) agent with
        | Ok () -> Ok (Some agent)
-       | Error error ->
-           ignore (services.stop_agent agent);
-           Error error)
+       | Error cause -> (
+           match services.stop_agent agent with
+           | Ok () -> Error cause
+           | Error cleanup -> Error (Ade_error.Rollback_failed { cause; cleanup = [ cleanup ] })))
 
 (* Everything ADE runs on the host for a workbench, released together. *)
 let release ~services ~paths name =
@@ -147,24 +136,30 @@ let release ~services ~paths name =
   let* () = agent in
   proxy
 
-let start ~services ~smolvm ~paths ~name ~purpose declaration =
+let start ~services ~smolvm ~paths ~purpose declaration =
+  let name = Declaration.name declaration in
   (* A leftover agent from a run that died is stopped, never reused: it may
      hold an identity this start should not have. *)
   let* () = release ~services ~paths name in
   let* agent = start_agent ~services ~paths ~name ~purpose declaration in
-  let undo () = ignore (release ~services ~paths name) in
+  let rollback cause results =
+    match List.filter_map (function Ok () -> None | Error error -> Some error) results with
+    | [] -> Error cause
+    | cleanup -> Error (Ade_error.Rollback_failed { cause; cleanup })
+  in
   (* The proxy is up before the machine boots, so the guest is never running
      without the only route it is allowed to use; provisioning needs it too. *)
   match services.start_proxy declaration with
   | Error error ->
-      undo ();
-      Error error
+      rollback error [ release ~services ~paths name ]
   | Ok egress_guard -> (
       let ssh_auth_sock = Option.map Ssh_agent.socket_path agent in
       match Smolvm.start ?ssh_auth_sock ?egress_guard smolvm name with
       | Error error ->
-          undo ();
-          Error error
+          (* A failed start command may have booted the VM before reporting failure. *)
+          let stopped = Smolvm.stop smolvm name in
+          let released = release ~services ~paths name in
+          rollback error [ stopped; released ]
       | Ok () -> (
           let configured =
             let* () =
@@ -182,9 +177,9 @@ let start ~services ~smolvm ~paths ~name ~purpose declaration =
           | Error error ->
               (* A workbench without its declared credentials is not what was
                  asked for; leave it stopped so a retry starts from scratch. *)
-              ignore (Smolvm.stop smolvm name);
-              undo ();
-              Error error))
+              let stopped = Smolvm.stop smolvm name in
+              let released = release ~services ~paths name in
+              rollback error [ stopped; released ]))
 
 let stop ~services ~smolvm ~paths name =
   let* () = Smolvm.stop smolvm name in

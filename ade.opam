@@ -15,6 +15,7 @@ depends: [
   "bos"
   "rresult"
   "alcotest" {with-test & >= "1.9.1"}
+  "hegel" {with-test & >= "0.25.0"}
 ]
 build: [
   ["dune" "build" "-p" name "-j" jobs]
