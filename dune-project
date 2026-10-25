@@ -13,4 +13,5 @@
   digestif
   bos
   rresult
-  (alcotest :with-test)))
+  (alcotest :with-test)
+  (hegel (and :with-test (>= 0.25.0)))))

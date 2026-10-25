@@ -5,10 +5,10 @@ open Ade
 let services =
   {
     Boot.start_agent =
-      (fun ~name:_ ~mode ~identity:_ ->
+      (fun ~name:_ ~mode ->
         Ok
           (Ssh_agent.of_record ~socket:"/nonexistent/agent.sock" ~pid:"0"
-             ~populated:(mode = Ssh_agent.Populated)));
+             ~populated:(match mode with Ssh_agent.Empty -> false | Ssh_agent.With_identity _ -> true)));
     stop_agent = (fun _ -> Ok ());
     install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
     start_proxy = (fun _ -> Ok None);
@@ -25,6 +25,7 @@ type fake = {
   mutable last_argv : string list;
   mutable stdins : string list;
   mutable exec_status : int;
+  mutable stop_status : int;
 }
 
 let runner fake request =
@@ -54,8 +55,8 @@ let runner fake request =
       fake.state <- "running";
       Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
   | "stop" ->
-      fake.state <- "stopped";
-      Ok { Process_runner.status = 0; stdout = ""; stderr = "" }
+      if fake.stop_status = 0 then fake.state <- "stopped";
+      Ok { Process_runner.status = fake.stop_status; stdout = ""; stderr = "stop failed" }
   | "exec" ->
       Ok { Process_runner.status = fake.exec_status; stdout = ""; stderr = "pacman: boom" }
   | "delete" ->
@@ -69,7 +70,7 @@ let temp_root () =
   path
 
 let setup_with_paths initial =
-  let fake = { state = initial; calls = []; last_argv = []; stdins = []; exec_status = 0 } in
+  let fake = { state = initial; calls = []; last_argv = []; stdins = []; exec_status = 0; stop_status = 0 } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
   let paths = State_paths.make ~root:(temp_root ()) () in
   (fake, paths, Lifecycle.make ~services ~smolvm ~paths)
@@ -111,7 +112,9 @@ let creating_an_absent_machine_creates_it () =
   Alcotest.(check string) "state" "created" fake.state
 
 let creating_an_existing_machine_converges () =
-  let fake, lifecycle = setup "stopped" in
+  let fake, lifecycle = setup "absent" in
+  check_outcome "first create" Lifecycle.Changed (Lifecycle.create lifecycle (declaration ()));
+  fake.calls <- [];
   check_outcome "create" Lifecycle.Converged (Lifecycle.create lifecycle (declaration ()));
   Alcotest.(check bool) "does not recreate" false (List.mem "create" fake.calls)
 
@@ -166,7 +169,9 @@ let removing_a_running_machine_deletes_it_and_its_state () =
   check_outcome "remove" Lifecycle.Changed (Lifecycle.remove lifecycle declaration);
   Alcotest.(check string) "state" "absent" fake.state;
   Alcotest.(check bool) "stopped first" true (List.mem "stop" fake.calls);
-  Alcotest.(check bool) "state dir gone" false (Sys.file_exists dir)
+  Alcotest.(check bool) "state dir gone" false (Sys.file_exists dir);
+  Alcotest.(check bool) "lock inode retained" true
+    (Sys.file_exists (State_paths.lock_file paths (Declaration.name declaration)))
 
 let removing_an_absent_machine_converges () =
   let _, lifecycle = setup "absent" in
@@ -214,7 +219,7 @@ let replace_line ~prefix ~by line = if String.starts_with ~prefix line then by e
 
 let drift_of lifecycle declaration =
   match Lifecycle.status lifecycle declaration with
-  | Ok status -> status.Lifecycle.drift
+  | Ok status -> Lifecycle.describe_drift status.Lifecycle.drift
   | Error error -> Alcotest.failf "status: %s" (Ade_error.to_string error)
 
 let created lifecycle declaration =
@@ -244,7 +249,7 @@ let a_new_mount_is_drift () =
   let edited =
     declaration
       ~edit:(replace_line ~prefix:"[ssh]"
-               ~by:"[[mount]]\nhost = \"/srv/data\"\nguest = \"/data\"\n\n[ssh]")
+               ~by:"[[mount]]\nhost = \"/usr/share\"\nguest = \"/data\"\n\n[ssh]")
       ()
   in
   match drift_of lifecycle edited with
@@ -268,9 +273,10 @@ let start_time_settings_are_not_drift () =
 
 (* A machine ADE has no record for, made before records existed or outside
    ADE, cannot be compared, and is not reported as drifted. *)
-let a_machine_without_a_record_has_no_drift () =
+let a_machine_without_a_record_is_unknown () =
   let _, lifecycle = setup "stopped" in
-  Alcotest.(check (option string)) "drift" None (drift_of lifecycle (declaration ()))
+  Alcotest.(check bool) "unknown is not a match" true
+    (Option.is_some (drift_of lifecycle (declaration ())))
 
 let removing_forgets_the_record () =
   let _, lifecycle = setup "absent" in
@@ -298,6 +304,16 @@ let a_failed_provision_stops_the_machine_and_reports () =
    | Ok _ -> Alcotest.fail "expected the failed script to be an error"
    | Error _ -> ());
   Alcotest.(check string) "stopped" "stopped" fake.state
+
+let failed_provision_reports_failed_shutdown () =
+  let fake, lifecycle = setup "absent" in
+  fake.exec_status <- 1;
+  fake.stop_status <- 2;
+  match Lifecycle.create lifecycle (provisioned_declaration ()) with
+  | Error (Ade_error.Rollback_failed {
+      cause = Ade_error.Runtime_failed { status = 1; _ };
+      cleanup = [ Ade_error.Runtime_failed { status = 2; _ } ] }) -> ()
+  | _ -> Alcotest.fail "provision or shutdown failure was hidden"
 
 let provision_reruns_on_a_stopped_machine () =
   let fake, lifecycle = setup "stopped" in
@@ -426,7 +442,7 @@ let refresh_with ~state ~github =
     { services with
       Boot.install_credentials = (fun ~smolvm:_ ~name:_ _ -> incr installs; Ok ()) }
   in
-  let fake = { state; calls = []; last_argv = []; stdins = []; exec_status = 0 } in
+  let fake = { state; calls = []; last_argv = []; stdins = []; exec_status = 0; stop_status = 0 } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
   let paths = State_paths.make ~root:(temp_root ()) () in
   let lifecycle = Lifecycle.make ~services ~smolvm ~paths in
@@ -438,7 +454,10 @@ let refresh_with ~state ~github =
       let path = Filename.temp_file "ade-work-" ".toml" in
       Out_channel.with_open_bin path (fun channel ->
           Out_channel.output_string channel
-            (source ^ "\n[credentials.github]\napp_id = \"1\"\n"));
+            (source
+             ^ "\n[credentials.github]\napp_id = \"1\"\ninstallation_id = \"2\"\n\
+                private_key_path = \"file:/unused\"\nrepositories = [\"owner/repo\"]\n\
+                permissions = { contents = \"read\" }\n"));
       match Declaration.load path with
       | Ok declaration -> declaration
       | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
@@ -463,13 +482,89 @@ let refreshing_without_github_converges () =
   check_outcome "refresh" Lifecycle.Converged result;
   Alcotest.(check int) "nothing installed" 0 installs
 
+let retargeting_a_mount_is_drift () =
+  let old_home = Sys.getenv "HOME" in
+  let home = temp_root () in
+  Unix.mkdir home 0o700;
+  let a = Filename.concat home "a" and b = Filename.concat home "b" in
+  Unix.mkdir a 0o700; Unix.mkdir b 0o700;
+  let link = Filename.concat home "source" in
+  Unix.symlink a link;
+  let directory = Filename.concat home "declarations" in
+  Unix.mkdir directory 0o700;
+  let declaration_path = Filename.concat directory "work.toml" in
+  let source = In_channel.with_open_bin (Declaration.path (declaration ())) In_channel.input_all in
+  Out_channel.with_open_bin declaration_path (fun ch ->
+      Out_channel.output_string ch (source ^ Printf.sprintf "\n[[mount]]\nhost = %S\nguest = \"/data\"\n" link));
+  Unix.putenv "HOME" home;
+  Fun.protect ~finally:(fun () -> Unix.putenv "HOME" old_home) (fun () ->
+      let declaration = Result.get_ok (Declaration.load declaration_path) in
+      let _, lifecycle = setup "absent" in
+      created lifecycle declaration;
+      Unix.unlink link; Unix.symlink b link;
+      Alcotest.(check bool) "resolved identity changed" true
+        (Option.is_some (drift_of lifecycle declaration)))
+
+let unsettled_machines_do_not_converge () =
+  List.iter (fun state ->
+      List.iter (fun (label, operation) ->
+          let _, lifecycle = setup state in
+          match operation lifecycle (declaration ()) with
+          | Error _ -> ()
+          | Ok _ -> Alcotest.failf "%s claimed success for %s" label state)
+        [ "start", Lifecycle.start; "stop", Lifecycle.stop; "create", Lifecycle.create ])
+    [ "booting"; "stopping"; "failed: boom" ]
+
+let lifecycle_matches_a_state_machine () =
+  Hegel.run_hegel_test ~database_key:"lifecycle-model" (fun tc ->
+      let fake, paths, lifecycle = setup_with_paths "absent" in
+      let declaration = declaration () in
+      Fun.protect ~finally:(fun () ->
+          ignore (Bos.OS.Dir.delete ~recurse:true (Fpath.v (State_paths.root paths)));
+          Sys.remove (Declaration.path declaration)) (fun () ->
+          let rule name operation next = Hegel.Stateful.Rule.create ~name
+              ~step:(fun _ model ->
+                (match operation lifecycle declaration with
+                 | Ok _ -> () | Error error -> Alcotest.fail (Ade_error.to_string error));
+                model := next !model) () in
+          let module Model = struct
+            type state = string ref
+            let rules = [ rule "create" Lifecycle.create (function "absent" -> "created" | state -> state);
+                          rule "start" Lifecycle.start (fun _ -> "running");
+                          rule "stop" Lifecycle.stop (function "running" -> "stopped" | state -> state);
+                          rule "remove" Lifecycle.remove (fun _ -> "absent") ]
+            let invariants = [ Hegel.Stateful.Invariant.create ~name:"observed state"
+                ~always_check:true ~inv:(fun _ expected ->
+                  Alcotest.(check string) "observed state" !expected fake.state) () ]
+          end in
+          Hegel.Stateful.run tc (module Model) ~init:(ref "absent")))
+
+let manifest_roundtrips_and_rejects_unknown_versions () =
+  let declaration = declaration () in
+  Fun.protect ~finally:(fun () -> Sys.remove (Declaration.path declaration)) (fun () ->
+      let manifest = Creation_manifest.make declaration [] in
+      let encoded = Creation_manifest.encode manifest in
+      let decoded = Result.get_ok (Creation_manifest.decode encoded) in
+      Alcotest.(check string) "roundtrip" encoded (Creation_manifest.encode decoded);
+      let json = Yojson.Safe.from_string encoded in
+      let changed = match json with `Assoc fields -> `Assoc (("version", `Int 2) :: List.remove_assoc "version" fields)
+        | _ -> Alcotest.fail "manifest is not an object" in
+      Alcotest.(check bool) "unknown schema refused" true
+        (Result.is_error (Creation_manifest.decode (Yojson.Safe.to_string changed))))
+
+let manifest_decoding_is_total () =
+  Hegel.run_hegel_test ~database_key:"manifest-total" (fun tc ->
+      let text = Hegel.draw ~label:"manifest" tc (Hegel.Generators.text ()) in
+      ignore (Creation_manifest.decode text))
+
 let () =
   Alcotest.run "lifecycle"
     [ ( "create",
         [ Alcotest.test_case "absent" `Quick creating_an_absent_machine_creates_it;
           Alcotest.test_case "existing" `Quick creating_an_existing_machine_converges ] );
       ( "start and stop",
-        [ Alcotest.test_case "running" `Quick starting_a_running_machine_converges;
+        [ Alcotest.test_case "unsettled" `Quick unsettled_machines_do_not_converge;
+          Alcotest.test_case "running" `Quick starting_a_running_machine_converges;
           Alcotest.test_case "stopped" `Quick starting_a_stopped_machine_starts_it;
           Alcotest.test_case "stop stopped" `Quick stopping_a_stopped_machine_converges;
           Alcotest.test_case "stop running" `Quick stopping_a_running_machine_stops_it;
@@ -478,15 +573,19 @@ let () =
         [ Alcotest.test_case "running" `Quick removing_a_running_machine_deletes_it_and_its_state;
           Alcotest.test_case "absent" `Quick removing_an_absent_machine_converges ] );
       ( "drift",
-        [ Alcotest.test_case "unchanged" `Quick unchanged_declaration_has_no_drift;
+        [ Alcotest.test_case "manifest codec" `Quick manifest_roundtrips_and_rejects_unknown_versions;
+          Alcotest.test_case "manifest decoder property" `Quick manifest_decoding_is_total;
+          Alcotest.test_case "resolved mount" `Quick retargeting_a_mount_is_drift;
+          Alcotest.test_case "unchanged" `Quick unchanged_declaration_has_no_drift;
           Alcotest.test_case "resources" `Quick changed_resources_are_drift;
           Alcotest.test_case "new mount" `Quick a_new_mount_is_drift;
           Alcotest.test_case "start-time settings" `Quick start_time_settings_are_not_drift;
-          Alcotest.test_case "no record" `Quick a_machine_without_a_record_has_no_drift;
+          Alcotest.test_case "no record" `Quick a_machine_without_a_record_is_unknown;
           Alcotest.test_case "rm forgets" `Quick removing_forgets_the_record ] );
       ( "provision",
         [ Alcotest.test_case "on create" `Quick creating_provisions_once_then_stops;
           Alcotest.test_case "failure" `Quick a_failed_provision_stops_the_machine_and_reports;
+          Alcotest.test_case "shutdown failure" `Quick failed_provision_reports_failed_shutdown;
           Alcotest.test_case "rerun" `Quick provision_reruns_on_a_stopped_machine;
           Alcotest.test_case "running" `Quick provision_refuses_a_running_machine;
           Alcotest.test_case "no script" `Quick provision_without_a_script_is_refused ] );
@@ -498,7 +597,8 @@ let () =
         [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
           Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );
       ( "convergence",
-        [ Alcotest.test_case "idempotent" `Quick commands_are_idempotent;
+        [ Alcotest.test_case "model property" `Quick lifecycle_matches_a_state_machine;
+          Alcotest.test_case "idempotent" `Quick commands_are_idempotent;
           Alcotest.test_case "status" `Quick status_reports_observed_state;
           Alcotest.test_case "lock" `Quick the_lock_excludes_a_second_operation;
           Alcotest.test_case "leftover lock file" `Quick a_leftover_lock_file_does_not_block;

@@ -4,6 +4,9 @@
     provider failure rather than a generic message. *)
 
 type t =
+  | Github_failed of Github_error.t
+  | Rollback_failed of { cause : t; cleanup : t list }
+      (** The original failure and failures releasing acquired resources. *)
   | Declaration_not_found of { path : string }
   | Declaration_invalid of { path : string; reason : string }
   | Workbench_name_invalid of { value : string; reason : string }

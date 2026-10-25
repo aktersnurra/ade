@@ -115,7 +115,8 @@ mode = "clone"
       Alcotest.(check string) "outbox source"
         (State_paths.outbox_dir paths (Declaration.name declaration))
         outbox.Host_mount.source;
-      Alcotest.(check bool) "outbox exists" true (Sys.is_directory outbox.Host_mount.source)
+      Alcotest.(check bool) "resolution has no creation effects" false
+        (Sys.file_exists outbox.Host_mount.source)
   | Ok mounts -> Alcotest.failf "expected repo and outbox, got %d" (List.length mounts)
 
 let home_is_refused () =

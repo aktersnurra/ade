@@ -48,6 +48,9 @@ val attach : t -> Declaration.t -> command:string list -> (unit, Ade_error.t) re
 val exec :
   t -> Declaration.t -> string list -> (Process_runner.output, Ade_error.t) result
 
-type status = { name : string; state : Smolvm.state; drift : string option }
+type drift = Not_created | Matches | Unknown of string | Drifted of string list
+val describe_drift : drift -> string option
+
+type status = { name : string; state : Smolvm.state; drift : drift }
 
 val status : t -> Declaration.t -> (status, Ade_error.t) result

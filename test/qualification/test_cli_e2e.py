@@ -347,7 +347,9 @@ class CliEndToEndTest(unittest.TestCase):
         failed = self.ade("start", "work-proxied", smolvm=old_runtime)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("unsupported --mediated-egress", failed.stderr)
-        self.assertEqual(self.machines().get("work-proxied"), "created")
+        # The refused start never reached the runtime; ADE's rollback stop did.
+        self.assertFalse([line for line in self.calls() if line.startswith("machine start")])
+        self.assertNotEqual(self.machines().get("work-proxied"), "running")
         net = self.tmp / "state" / "workbenches" / "work-proxied" / "net"
         self.assertFalse((net / "mediated").exists())
         # The guard listens in the proxy process, so a closed proxy port means

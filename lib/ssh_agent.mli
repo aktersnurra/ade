@@ -25,9 +25,8 @@ val of_record : socket:string -> pid:string -> populated:bool -> t
     that stops a workbench can stop the agent another process started. *)
 
 type mode =
-  | Populated
-      (** A normal start: the declared identity is loaded and the workbench can
-          sign. *)
+  | With_identity of Secret.t
+      (** Load exactly this identity for a normal start. *)
   | Empty
       (** A bounded maintenance window. The agent exists so the socket is
           present, but holds no identity, so the export helper cannot sign
@@ -38,13 +37,11 @@ val start :
   paths:State_paths.t ->
   name:Workbench_name.t ->
   mode:mode ->
-  identity:Secret.t option ->
   unit ->
   (t, Ade_error.t) result
 (** Start the agent for one workbench.
 
-    [identity] is required for {!Populated} and ignored for {!Empty}, so a
-    maintenance window cannot accidentally load a key by passing one. *)
+    [Empty] carries no identity; [With_identity] cannot omit its identity. *)
 
 val stop : ?runner:Process_runner.t -> t -> (unit, Ade_error.t) result
 (** Stop the agent and remove its socket. Called when the workbench stops, so

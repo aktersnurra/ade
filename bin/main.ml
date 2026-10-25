@@ -55,9 +55,10 @@ let with_declaration name action =
    should hear that before the agents run, not from ade status later. *)
 let warn_if_drifted lifecycle declaration =
   match Lifecycle.status lifecycle declaration with
-  | Ok { Lifecycle.drift = Some reason; name; _ } ->
-      prerr_endline (Printf.sprintf "ade: warning: %s: %s" name reason)
-  | Ok _ | Error _ -> ()
+  | Ok { Lifecycle.drift; name; _ } ->
+      Option.iter (fun reason -> prerr_endline (Printf.sprintf "ade: warning: %s: %s" name reason))
+        (Lifecycle.describe_drift drift)
+  | Error error -> prerr_endline ("ade: warning: " ^ Ade_error.to_string error)
 
 let report label = function
   | Lifecycle.Converged -> print_endline (label ^ ": already satisfied")
@@ -81,6 +82,9 @@ let render_state = function
   | Smolvm.Created -> "created"
   | Smolvm.Stopped -> "stopped"
   | Smolvm.Running -> "running"
+  | Smolvm.Booting -> "booting"
+  | Smolvm.Stopping -> "stopping"
+  | Smolvm.Failed reason -> reason
 
 let status_command =
   let open Cmdliner in
@@ -90,7 +94,7 @@ let status_command =
           (fun status ->
             Printf.printf "%s\t%s\n" status.Lifecycle.name
               (render_state status.Lifecycle.state);
-            match status.Lifecycle.drift with
+            match Lifecycle.describe_drift status.Lifecycle.drift with
             | Some reason -> Printf.printf "drift\t%s\n" reason
             | None -> ())
           (Lifecycle.status lifecycle declaration))
@@ -188,15 +192,12 @@ let doctor_command =
     let ssh =
       match Declaration.ssh declaration with
       | Declaration.Disabled -> []
-      | Declaration.Dedicated_agent { key_ref } -> [ ("ssh key", Secret.of_reference key_ref) ]
+      | Declaration.Dedicated_agent { key_ref } -> [ ("ssh key", Ok key_ref) ]
     in
     let github =
       match Declaration.github_credential declaration with
       | None -> []
-      | Some table -> (
-          match Github_credential.load_config table with
-          | Ok config -> [ ("github key", Ok config.Github_credential.private_key) ]
-          | Error error -> [ ("github key", Error (Github_credential.describe_error error)) ])
+      | Some config -> [ ("github key", Ok (Github_credential.private_key config)) ]
     in
     let anthropic =
       match Declaration.anthropic_api_key_ref declaration with

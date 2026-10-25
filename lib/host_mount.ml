@@ -1,4 +1,4 @@
-type resolved = { source : string; guest : string; read_only : bool }
+type resolved = { source : string; guest : string; read_only : bool; clone_name : string option }
 type policy = { home : string; protected : string list }
 
 let ( let* ) = Result.bind
@@ -129,7 +129,9 @@ let resolve policy (mount : Declaration.mount) =
                quoted (Filename.quote found))
       | None -> Ok ()
   in
-  Ok { source; guest = mount.Declaration.guest; read_only }
+  let clone_name = match mount.Declaration.mode with
+    | Declaration.Clone -> Some (Declaration.clone_name mount) | _ -> None in
+  Ok { source; guest = mount.Declaration.guest; read_only; clone_name }
 
 let resolve_all policy mounts =
   List.fold_left
@@ -144,8 +146,7 @@ let resolve_all policy mounts =
    ADE, not to the user, so it needs none of the user-path policing. *)
 let outbox ~paths declaration =
   let source = State_paths.outbox_dir paths (Declaration.name declaration) in
-  let* () = State_paths.ensure_dir source in
-  Ok { source; guest = "/outbox"; read_only = false }
+  { source; guest = "/outbox"; read_only = false; clone_name = None }
 
 let for_declaration ~paths declaration =
   match Declaration.mounts declaration with
@@ -163,8 +164,7 @@ let for_declaration ~paths declaration =
               mounts
           in
           if List.exists (fun m -> m.Declaration.mode = Declaration.Clone) mounts then
-            let* outbox = outbox ~paths declaration in
-            Ok (resolved @ [ outbox ])
+            Ok (resolved @ [ outbox ~paths declaration ])
           else Ok resolved)
 
 let volume_spec resolved =

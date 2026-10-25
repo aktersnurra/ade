@@ -10,10 +10,7 @@ type rotation = { steps : step list; generation : Credential.generation }
 
 let ( let* ) = Result.bind
 
-let github_error error =
-  Ade_error.Operation_refused
-    { operation = "rotate github credential";
-      reason = Github_credential.describe_error error }
+let github_error error = Ade_error.Github_failed error
 
 let rotate_github ?http ?runner ~smolvm ~name ~config ~now ~previous () =
   let runner = match runner with Some r -> r | None -> Process_runner.run in
@@ -22,10 +19,6 @@ let rotate_github ?http ?runner ~smolvm ~name ~config ~now ~previous () =
     | Some http -> http
     | None -> fun ~url ~bearer ~body -> Http.post ~runner ~url ~bearer ~body ()
   in
-  (* Refuse an over-broad configuration before contacting GitHub at all: an
-     unscoped token would carry the App's full installation authority. *)
-  let* () = Result.map_error github_error (Github_credential.validate config) in
-
   let signer =
     Github_credential.openssl_signer ~runner ~openssl:"/usr/bin/openssl"
       ~reader:(Secret.default_reader ~runner) config
@@ -37,12 +30,9 @@ let rotate_github ?http ?runner ~smolvm ~name ~config ~now ~previous () =
     Result.map_error github_error
       (Github_credential.exchange ~post:http config ~jwt ~now)
   in
-  (* The token goes straight from the exchange to the installer. It is never
-     returned, logged, or held anywhere it could be read back. *)
+  (* Only the exchange can construct the installer's verified credential. *)
   let* installed =
-    Credential_installer.install ~smolvm ~name ~provider:Credential.Github
-      ~value:minted.Github_credential.value ~expires_at:minted.Github_credential.expires_at ~now
-      ~previous
+    Credential_installer.install ~smolvm ~name ~credential:minted ~now ~previous
   in
   Ok
     {
