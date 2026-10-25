@@ -11,7 +11,7 @@ let services =
              ~populated:(mode = Ssh_agent.Populated)));
     stop_agent = (fun _ -> Ok ());
     install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
-    start_proxy = (fun _ -> Ok ());
+    start_proxy = (fun _ -> Ok None);
     ensure_proxy = (fun _ -> Ok ());
     stop_proxy = (fun _ -> Ok ());
   }

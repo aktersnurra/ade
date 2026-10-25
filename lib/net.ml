@@ -29,15 +29,26 @@ let read_lines path =
       |> List.map String.trim
       |> List.filter (fun line -> line <> "" && not (String.starts_with ~prefix:"#" line))
 
-let allowed_hosts ~paths declaration =
+let persistent_hosts declaration =
   let declared = match proxy_of declaration with Some (_, hosts, _) -> hosts | None -> [] in
-  let name = Declaration.name declaration in
-  declared
-  @ read_lines (allow_file declaration)
-  @ read_lines (State_paths.session_allow_file paths name)
+  declared @ read_lines (allow_file declaration)
+
+let session_hosts ~paths name =
+  read_lines (State_paths.session_allow_file paths name)
   @ read_lines (State_paths.auto_allow_file paths name)
 
+let allowed_hosts ~paths declaration =
+  persistent_hosts declaration @ session_hosts ~paths (Declaration.name declaration)
+
 let patterns hosts = List.filter_map (fun host -> Result.to_option (Egress.parse_pattern host)) hosts
+
+let is_allowed ~paths declaration (target : Egress.target) =
+  let name = Declaration.name declaration in
+  (* Host-owned persistent policy is authoritative. A session wildcard, unlike
+     persistent policy, must not bypass a user's explicit host revocation. *)
+  Egress.allowed (patterns (persistent_hosts declaration)) target
+  || (not (List.mem target.host (read_lines (State_paths.revoked_file paths name)))
+      && Egress.allowed (patterns (session_hosts ~paths name)) target)
 
 let append path line =
   let* () = State_paths.ensure_dir (Filename.dirname path) in
@@ -63,21 +74,12 @@ let remove_lines path keep =
         Ok ()
       with Sys_error reason | Unix.Unix_error (_, _, reason) -> Error (refused "write" reason))
 
-let line_host line =
-  let line = String.trim line in
-  let without_wildcard =
-    if String.starts_with ~prefix:"*." line then String.sub line 2 (String.length line - 2) else line
-  in
-  match String.rindex_opt without_wildcard ':' with
-  | Some colon -> String.sub without_wildcard 0 colon
-  | None -> without_wildcard
-
 type scope = Session | Always
 
 let allow ~paths declaration ~host ~scope =
   let* _ = require_proxied "net allow" declaration in
   let host = String.lowercase_ascii (String.trim host) in
-  let* _ = Result.map_error (refused "net allow") (Egress.parse_pattern host) in
+  let* pattern = Result.map_error (refused "net allow") (Egress.parse_pattern host) in
   let name = Declaration.name declaration in
   let file =
     match scope with
@@ -86,7 +88,8 @@ let allow ~paths declaration ~host ~scope =
   in
   (* Allowing a host is also the way back from revoking it. *)
   let* () =
-    remove_lines (State_paths.revoked_file paths name) (fun line -> String.trim line <> line_host host)
+    remove_lines (State_paths.revoked_file paths name)
+      (fun line -> not (Egress.matches_host pattern (String.trim line)))
   in
   let* () = append file (host ^ "\n") in
   Ok file
@@ -94,20 +97,21 @@ let allow ~paths declaration ~host ~scope =
 let revoke ~paths declaration ~host =
   let* _ = require_proxied "net revoke" declaration in
   let host = String.lowercase_ascii (String.trim host) in
-  let* _ = Result.map_error (refused "net revoke") (Egress.parse_target ~default_port:443 host) in
-  let host = line_host host in
+  let* target = Result.map_error (refused "net revoke") (Egress.parse_target ~default_port:443 host) in
+  let host = target.Egress.host in
   let name = Declaration.name declaration in
-  let other line = line_host line <> host in
+  let other line =
+    match Egress.parse_target ~default_port:443 (String.trim line) with
+    | Ok target -> target.host <> host
+    | Error _ -> true (* Keep wildcard grants for the other hosts they cover. *)
+  in
   let* () = remove_lines (State_paths.session_allow_file paths name) other in
   let* () = remove_lines (State_paths.auto_allow_file paths name) other in
   let* () = append (State_paths.revoked_file paths name) (host ^ "\n") in
   (* The declaration and NAME.allow are the user's own files and are not
      edited; a host listed there stays allowed, and the caller is told so. *)
-  Ok
-    (List.exists
-       (fun line -> line_host line = host)
-       ((match proxy_of declaration with Some (_, hosts, _) -> hosts | None -> [])
-       @ read_lines (allow_file declaration)))
+  Ok (List.exists (fun pattern -> Egress.matches_host pattern host)
+        (patterns (persistent_hosts declaration)))
 
 let events ~paths declaration =
   match
@@ -119,8 +123,7 @@ let events ~paths declaration =
 
 let pending ~paths declaration =
   let* _ = require_proxied "net pending" declaration in
-  let current = patterns (allowed_hosts ~paths declaration) in
-  Ok (Egress.pending ~allowed:(Egress.allowed current) (events ~paths declaration))
+  Ok (Egress.pending ~allowed:(is_allowed ~paths declaration) (events ~paths declaration))
 
 let log ~paths declaration =
   let* _ = require_proxied "net log" declaration in
@@ -155,6 +158,7 @@ let wait_until ~seconds condition =
   loop ()
 
 let stop ~paths name =
+  (try Sys.remove (State_paths.mediated_file paths name) with Sys_error _ -> ());
   match running_pid ~paths name with
   | None -> Ok ()
   | Some pid ->
@@ -223,12 +227,33 @@ let start ~paths declaration =
     (fun path -> try Sys.remove path with Sys_error _ -> ())
     [ State_paths.session_allow_file paths name; State_paths.auto_allow_file paths name;
       State_paths.revoked_file paths name ];
-  launch ~paths declaration
+  (* A fresh boot must get a fresh capability, never silently reuse one after
+     a failed deletion. Recovery through [ensure] deliberately preserves it. *)
+  let* () =
+    try Unix.unlink (State_paths.guard_file paths name); Ok () with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+    | Unix.Unix_error (error, _, _) -> Error (refused "start proxy" (Unix.error_message error))
+  in
+  let* () = launch ~paths declaration in
+  match proxy_of declaration with
+  | None -> Ok None
+  | Some _ ->
+      Result.map Option.some
+        (Result.map_error (refused "start proxy") (Egress_guard.load (State_paths.guard_file paths name)))
+
+let mark_started ~paths name = append (State_paths.mediated_file paths name) ""
 
 let ensure ~paths declaration =
-  if proxy_of declaration = None || running_pid ~paths (Declaration.name declaration) <> None
-  then Ok ()
-  else launch ~paths declaration
+  let name = Declaration.name declaration in
+  match proxy_of declaration with
+  | None -> Ok ()
+  | Some _ ->
+      if not (Sys.file_exists (State_paths.mediated_file paths name)) then
+        Error (refused "start proxy" "this running workbench has no mediated boot record; restart it")
+      else
+        let* _ = Result.map_error (refused "start proxy")
+            (Egress_guard.load (State_paths.guard_file paths name)) in
+        if running_pid ~paths name <> None then Ok () else launch ~paths declaration
 
 let recorder ~paths name =
   let lock = Mutex.create () in
@@ -325,14 +350,21 @@ let serve ~paths ~declaration_path =
   let name = Declaration.name declaration in
   let* () = State_paths.ensure_dir (State_paths.net_dir paths name) in
   let* socket = Result.map_error (refused "net serve") (Egress_proxy.listen proxy) in
+  let guard_path = State_paths.guard_file paths name in
+  let* previous =
+    if Sys.file_exists guard_path then
+      Result.map Option.some (Result.map_error (refused "net serve") (Egress_guard.load guard_path))
+    else Ok None
+  in
+  let* binding, guard_socket = Result.map_error (refused "net serve")
+      (Egress_guard.listen ?binding:previous ~proxy ()) in
+  let* () = Result.map_error (refused "net serve") (Egress_guard.save guard_path binding) in
   let pid_path = State_paths.proxy_pid_file paths name in
   let pid_fd = Unix.openfile pid_path [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC ] 0o600 in
   match Unix.lockf pid_fd Unix.F_TLOCK 0 with
   | exception Unix.Unix_error _ -> Error (refused "net serve" "a proxy is already running")
   | () ->
-      let pid = Printf.sprintf "%d\n" (Unix.getpid ()) in
       Unix.ftruncate pid_fd 0;
-      ignore (Unix.write_substring pid_fd pid 0 (String.length pid));
       let record = recorder ~paths name in
       (* The declaration is re-read for every request, so editing its hosts
          applies to the running workbench; a broken edit keeps the last good
@@ -352,12 +384,17 @@ let serve ~paths ~declaration_path =
       let config =
         {
           Egress_proxy.workbench = Workbench_name.to_string name;
-          policy = (fun () -> patterns (allowed_hosts ~paths (current ())));
+          is_allowed = (fun target -> is_allowed ~paths (current ()) target);
           decide;
           record;
           resolve = Egress_proxy.default_resolve;
         }
       in
+      Sys.set_signal Sys.sigpipe Sys.Signal_ignore;
+      ignore (Thread.create (Egress_guard.serve binding) guard_socket);
+      (* Publish readiness only after both listeners and the binding exist. *)
+      let pid = Printf.sprintf "%d\n" (Unix.getpid ()) in
+      ignore (Unix.write_substring pid_fd pid 0 (String.length pid));
       Egress_proxy.serve config socket
 
 let proxy_url declaration =

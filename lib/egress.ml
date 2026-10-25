@@ -59,12 +59,15 @@ let parse_pattern value =
 
 let web_ports = [ 443; 80 ]
 
+let render_allow_argument (target : target) =
+  if List.mem target.port web_ports then target.host else render_target target
+
+let matches_host pattern host =
+  if pattern.wildcard then String.ends_with ~suffix:("." ^ pattern.name) host
+  else host = pattern.name
+
 let matches pattern target =
-  let name_matches =
-    if pattern.wildcard then String.ends_with ~suffix:("." ^ pattern.name) target.host
-    else target.host = pattern.name
-  in
-  name_matches
+  matches_host pattern target.host
   && match pattern.port with
      | Some port -> port = target.port
      | None -> List.mem target.port web_ports
@@ -162,7 +165,7 @@ let blocked_response ?reason ~workbench target =
     Printf.sprintf
       "%sNothing in this machine can allow it. Ask the user to run, on the host:\n\
       \  ade net allow %s %s\n"
-      why workbench target.host
+      why workbench (render_allow_argument target)
   in
   Printf.sprintf
     "HTTP/1.1 403 Blocked by ade\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\

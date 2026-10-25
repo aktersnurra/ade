@@ -10,6 +10,10 @@ val allow_file : Declaration.t -> string
 
 val allowed_hosts : paths:State_paths.t -> Declaration.t -> string list
 
+val is_allowed : paths:State_paths.t -> Declaration.t -> Egress.target -> bool
+(** Persistent grants win; otherwise revocations override session grants,
+    including wildcards and classifier approvals. *)
+
 type scope =
   | Session  (** until the workbench next starts *)
   | Always  (** appended to [NAME.allow] *)
@@ -44,9 +48,13 @@ val decider :
 val pending : paths:State_paths.t -> Declaration.t -> (Egress.pending list, Ade_error.t) result
 val log : paths:State_paths.t -> Declaration.t -> (Egress.event list, Ade_error.t) result
 
-val start : paths:State_paths.t -> Declaration.t -> (unit, Ade_error.t) result
-(** Start the workbench's proxy, replacing one already running, and clear the
-    session approvals. A no-op for a workbench that is not proxied. *)
+val start : paths:State_paths.t -> Declaration.t -> (Egress_guard.binding option, Ade_error.t) result
+(** Start the proxy and host guard, replace the binding, and clear session
+    approvals. Return the binding SmolVM must use, or [None] unless proxied. *)
+
+val mark_started : paths:State_paths.t -> Workbench_name.t -> (unit, Ade_error.t) result
+(** Record successful mediated boot, so recovery cannot silently adopt an
+    already-running machine launched before host mediation was enforced. *)
 
 val ensure : paths:State_paths.t -> Declaration.t -> (unit, Ade_error.t) result
 (** Start the proxy only if it is not running, keeping the session approvals:

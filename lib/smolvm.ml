@@ -118,11 +118,11 @@ let create_argv declaration ~mounts =
         [ "--net" ]
         @ List.concat_map (fun host -> [ "--allow-host"; host ]) hosts
         @ List.concat_map (fun cidr -> [ "--allow-cidr"; cidr ]) cidrs
-    (* The proxy's address is the one destination; every host the agents use
-       is decided by the proxy, not by the runtime. *)
+    (* The CIDR narrows the IP; the host mediator installed at every start
+       enforces the exact TCP port. Mediation requires virtio-net. *)
     | Declaration.Proxied { proxy; _ } ->
         let address = String.sub proxy 0 (String.rindex proxy ':') in
-        [ "--net"; "--allow-cidr"; address ^ "/32" ]
+        [ "--net"; "--net-backend"; "virtio-net"; "--allow-cidr"; address ^ "/32" ]
   in
   (* Only mounts that passed the host policy reach the runtime, and the runtime
      re-checks each source against its own list of system paths. *)
@@ -140,9 +140,24 @@ let create_argv declaration ~mounts =
 
 let create t declaration ~mounts = succeeded t (create_argv declaration ~mounts)
 
-let start ?ssh_auth_sock t name =
+let start ?ssh_auth_sock ?egress_guard t name =
   let argv = [ "machine"; "start"; "--name"; Workbench_name.to_string name ] in
+  let argv =
+    match egress_guard with
+    | None -> argv
+    | Some binding ->
+        argv @ [ "--mediated-egress"; "--egress-interceptor"; Egress_guard.address binding ]
+  in
   let base = request t argv in
+  let base =
+    match egress_guard with
+    | None -> base
+    | Some binding ->
+        { base with
+          Process_runner.env =
+            ("SMOLVM_INTERCEPTOR_TOKEN", Egress_guard.token_hex binding)
+            :: base.Process_runner.env }
+  in
   let request =
     match ssh_auth_sock with
     | None -> base

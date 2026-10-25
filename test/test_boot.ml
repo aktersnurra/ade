@@ -71,10 +71,12 @@ let services world =
     start_proxy =
       (fun declaration ->
         match Declaration.network declaration with
-        | Declaration.Proxied _ ->
+        | Declaration.Proxied { proxy; _ } ->
             note world "proxy start";
-            Ok ()
-        | _ -> Ok ());
+            (match Egress_guard.listen ~proxy () with
+             | Ok (binding, socket) -> Unix.close socket; Ok (Some binding)
+             | Error reason -> Alcotest.fail reason)
+        | _ -> Ok None);
     ensure_proxy = (fun _ -> Ok ());
     stop_proxy = (fun _ -> Ok ());
   }
@@ -234,7 +236,9 @@ let proxied_start_runs_the_proxy_first () =
   expect_ok "start" (start world smolvm paths (proxied ()));
   Alcotest.check log "order"
     [ "proxy start"; "machine start"; "machine exec"; "machine exec"; "credentials" ]
-    (events world)
+    (events world);
+  Alcotest.(check bool) "host mediation token" true
+    (List.mem_assoc "SMOLVM_INTERCEPTOR_TOKEN" world.start_env)
 
 let unproxied_start_writes_no_proxy_config () =
   let world, smolvm, paths = setup () in

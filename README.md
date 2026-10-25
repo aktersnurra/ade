@@ -207,16 +207,38 @@ Keychain), `pass:ENTRY` (password-store, the whole entry) or `file:PATH`.
 
 ## Egress proxy
 
-SmolVM's allowlist is fixed when the machine is created and works at the DNS
-level. A `proxied` workbench instead may reach exactly one address, its proxy,
-which ADE runs on the host:
+A `proxied` workbench uses SmolVM's **virtio-net backend and mediated-egress
+v2 protocol** on Linux or macOS. The runtime must support `machine create
+--net-backend virtio-net` and `machine start --mediated-egress
+--egress-interceptor ADDR`, with `SMOLVM_INTERCEPTOR_TOKEN`. Older runtimes
+fail rather than falling back to IP-only filtering.
+
+The IP allowlist alone is not isolation: it permits every port on that IP.
+ADE also runs an authenticated, host-only flow guard that allows TCP only to
+this workbench's exact proxy IP and port. Another workbench's proxy on the same
+host is denied. The token never enters the guest or command-line arguments;
+it is kept in ADE's private host state and passed to SmolVM's environment.
+SmolVM denies other datagrams in mediated mode except its own DNS handling.
+See [SmolVM's protocol and platform requirements](https://github.com/smol-machines/smolvm/blob/main/docs/mediated-egress.md).
+
+Choose a host IPv4 address the guest can reach and the host can bind:
 
 ```toml
 [network]
 posture = "proxied"
-proxy = "127.0.0.1:3128"     # what the guest connects to; one port per workbench
+proxy = "192.0.2.10:3128"    # REPLACE with your reachable host IPv4; one port per workbench
 hosts = ["github.com", "*.githubusercontent.com", "registry.npmjs.org:443"]
 ```
+
+The example IP is a placeholder, not a usable default. Guest `127.0.0.1`
+refers to the guest, not the host, on virtio-net. Verify the chosen address
+with [the real-VM smoke checks](docs/smoke-run.md).
+
+An already-running workbench from before this guard must be explicitly
+restarted. Older machines created with a different network backend need to
+be recreated (preserve any wanted guest data first). Proxy recovery reuses
+the running VM's binding; a new workbench start rotates it. A missing or
+corrupt binding fails closed and requires a restart.
 
 The proxy handles `CONNECT` and plain `http://` requests, one destination per
 connection, and resolves names itself, refusing any that resolve to loopback
@@ -234,6 +256,9 @@ a file you wrote. The hosts, `work.allow` and the session approvals are read for
 every request, so all three apply to a running workbench; only `proxy` is fixed
 when the machine is created. A pattern is `HOST` (ports 443 and 80),
 `HOST:PORT`, or `*.SUFFIX` (names below the suffix, not the suffix itself).
+A revocation overrides session wildcards as well as exact session grants.
+Persistent grants in the declaration or `NAME.allow` remain authoritative;
+`net revoke` warns if one still permits the host.
 
 ADE writes `HTTPS_PROXY` and friends into the guest's shell profile (and
 passes them to `ade exec` and provisioning, which read no profile) and a

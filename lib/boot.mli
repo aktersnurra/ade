@@ -26,8 +26,9 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
-  start_proxy : Declaration.t -> (unit, Ade_error.t) result;
-      (** A no-op unless the workbench is proxied. *)
+  start_proxy : Declaration.t -> (Egress_guard.binding option, Ade_error.t) result;
+      (** Start the proxy and return its required host guard binding; [None]
+          unless proxied. *)
   ensure_proxy : Declaration.t -> (unit, Ade_error.t) result;
       (** Restart a proxy that died under a running machine. *)
   stop_proxy : Workbench_name.t -> (unit, Ade_error.t) result;

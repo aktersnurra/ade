@@ -52,7 +52,7 @@ let proxy ~upstream_port =
   let config =
     {
       Egress_proxy.workbench = "work";
-      policy = (fun () -> patterns);
+      is_allowed = Egress.allowed patterns;
       record = (fun event -> Mutex.protect lock (fun () -> events := event :: !events));
       decide =
         (fun target ->

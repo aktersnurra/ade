@@ -27,10 +27,11 @@ workspace_gib = 256
 
 [network]
 posture = "proxied"
-# The address the guest connects to and the proxy listens on. Each proxied
-# workbench needs its own port. Confirm on a first real run that the guest
-# reaches the host here (docs/smoke-run.md).
-proxy = "127.0.0.1:3128"
+# REPLACE this documentation-only IP with a host IPv4 address the guest can
+# reach and the host can bind. Guest loopback is not the host on virtio-net.
+# Each workbench needs its own port; the host-mediated guard enforces that
+# exact endpoint. Requires SmolVM mediated-egress v2 (docs/smoke-run.md).
+proxy = "192.0.2.10:3128"
 hosts = [
   "github.com",
   "api.github.com",
