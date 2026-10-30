@@ -23,3 +23,8 @@ curl -fsSL https://claude.ai/install.sh | bash
 cat > /etc/profile.d/ade-path.sh <<'EOF'
 export PATH="$HOME/.local/bin:$PATH"
 EOF
+
+# Clone mounts under /src belong to the host user, not to guest root, so git
+# refuses to clone them as "dubious ownership". They are the user's own
+# repositories, mounted read-only.
+git config --system --replace-all safe.directory '/src/*' '^/src/\*$'

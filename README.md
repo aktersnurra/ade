@@ -180,11 +180,13 @@ python3 -m unittest discover -s test -t .  # CLI end-to-end against a fake SmolV
 
 ## Status
 
-Nothing has run against a real SmolVM, ssh-agent, `pass` or GitHub yet; the
-tests use a fake runtime. Known gaps:
+Run for real on Artix x86_64 with SmolVM 1.32.4: `create` with provisioning
+from `provision/arch.sh`, `start`, `exec`, `attach` with a command, `stop`,
+`provision` re-run, `pull` from a clone mount (jj imports the refs in a
+colocated repository), and `rm`. The allowlist is enforced by IP, not only by
+DNS: unlisted names and raw IPs are refused. Not yet run for real:
 
-- The GitHub token check assumes the response carries `repository_selection`
+- `[ssh] mode = "dedicated_agent"`, `pass:` secrets and `[credentials.github]`.
+  The GitHub token check assumes the response carries `repository_selection`
   and `repositories`; confirm on the first real run.
-- `ade pull` is tested against real git with a simulated guest, not a real VM.
-- `provision/arch.sh` and the allowlist hosts for the Herdr and Claude Code
-  installers are untested against the real services.
+- macOS arm64.
