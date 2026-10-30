@@ -86,6 +86,10 @@ def main():
         return 0
 
     if verb == "delete":
+        # SmolVM 1.32 asks for confirmation, and refuses without a terminal.
+        if "--force" not in argv:
+            print(f"machine '{name}' needs confirmation but stdin is not a terminal", file=sys.stderr)
+            return 1
         state.pop(name, None)
         save(state)
         return 0
@@ -94,6 +98,10 @@ def main():
         if state.get(name) != "running":
             print(f"machine '{name}' is not running", file=sys.stderr)
             return 1
+        # machine shell takes no command.
+        if verb == "shell" and "--" in argv:
+            print("error: unexpected argument '--' found", file=sys.stderr)
+            return 2
         if "--" in argv:
             command = argv[argv.index("--") + 1 :]
             if command:
