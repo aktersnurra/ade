@@ -322,7 +322,8 @@ let attaching_to_a_stopped_machine_starts_it () =
    | Ok () -> ()
    | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
   Alcotest.(check string) "state" "running" fake.state;
-  Alcotest.(check bool) "attached" true (List.mem "shell" fake.calls)
+  (* work.toml enables Herdr, so the attachment is an interactive exec of it. *)
+  Alcotest.(check bool) "attached" true (List.mem "herdr" fake.last_argv)
 
 (* Repeating any command must reach the same end state. *)
 let commands_are_idempotent () =

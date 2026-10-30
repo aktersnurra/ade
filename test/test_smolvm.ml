@@ -162,6 +162,53 @@ let ssh_socket_never_reaches_argv () =
             (List.assoc_opt "SSH_AUTH_SOCK" request.Process_runner.env)
       | _ -> Alcotest.fail "expected exactly one request")
 
+(* The argv of the one request an adapter call made. *)
+let only_argv recorder =
+  match !recorder with
+  | [ request ] -> request.Process_runner.argv
+  | _ -> Alcotest.fail "expected exactly one request"
+
+let succeed label = function
+  | Ok _ -> ()
+  | Error error -> Alcotest.failf "%s: %s" label (Ade_error.to_string error)
+
+(* SmolVM 1.32 discards piped stdin unless exec is given -i, and still exits
+   0, so a provision script sent without it never runs and reports success. *)
+let piped_stdin_keeps_stdin_open () =
+  let recorder = ref [] in
+  let smolvm = adapter (fake recorder) in
+  succeed "exec" (Smolvm.exec_with_stdin smolvm (name_exn "work") [ "bash"; "-s" ] ~stdin:"true\n");
+  Alcotest.(check (list string)) "argv"
+    [ "machine"; "exec"; "-i"; "--name"; "work"; "--"; "bash"; "-s" ]
+    (only_argv recorder)
+
+(* Delete asks for confirmation unless forced, and refuses when stdin is not
+   a terminal. ADE asks first itself: ade rm requires --yes. *)
+let delete_is_forced () =
+  let recorder = ref [] in
+  let smolvm = adapter (fake recorder) in
+  succeed "delete" (Smolvm.delete smolvm (name_exn "work"));
+  Alcotest.(check (list string)) "argv"
+    [ "machine"; "delete"; "--name"; "work"; "--force" ]
+    (only_argv recorder)
+
+(* machine shell takes no command, so a command is run with an interactive
+   exec on a terminal instead. *)
+let attach_without_a_command_opens_a_shell () =
+  let recorder = ref [] in
+  let smolvm = adapter (fake recorder) in
+  succeed "attach" (Smolvm.attach smolvm (name_exn "work") ~command:[]);
+  Alcotest.(check (list string)) "argv" [ "machine"; "shell"; "--name"; "work" ]
+    (only_argv recorder)
+
+let attach_with_a_command_execs_on_a_terminal () =
+  let recorder = ref [] in
+  let smolvm = adapter (fake recorder) in
+  succeed "attach" (Smolvm.attach smolvm (name_exn "work") ~command:[ "herdr" ]);
+  Alcotest.(check (list string)) "argv"
+    [ "machine"; "exec"; "-i"; "-t"; "--name"; "work"; "--"; "herdr" ]
+    (only_argv recorder)
+
 let failure_status_is_reported () =
   let recorder = ref [] in
   let smolvm = adapter (fake ~status:2 ~stderr:"boom" recorder) in
@@ -194,5 +241,9 @@ let () =
         [ Alcotest.test_case "attach inherits" `Quick attach_inherits_the_terminal;
           Alcotest.test_case "exec captures" `Quick exec_captures_output;
           Alcotest.test_case "ssh socket" `Quick ssh_socket_never_reaches_argv;
-          Alcotest.test_case "failure" `Quick failure_status_is_reported ] )
+          Alcotest.test_case "failure" `Quick failure_status_is_reported;
+          Alcotest.test_case "stdin needs -i" `Quick piped_stdin_keeps_stdin_open;
+          Alcotest.test_case "delete forced" `Quick delete_is_forced;
+          Alcotest.test_case "bare attach" `Quick attach_without_a_command_opens_a_shell;
+          Alcotest.test_case "attach command" `Quick attach_with_a_command_execs_on_a_terminal ] )
     ]

@@ -165,6 +165,17 @@ class CliEndToEndTest(unittest.TestCase):
         again = self.ade("create", "work")
         self.assertNotEqual(again.returncode, 0)
 
+    def test_rm_deletes_the_machine(self):
+        self.ade("create", "work")
+        removed = self.ade("rm", "work", "--yes")
+        self.assertEqual(removed.returncode, 0, msg=removed.stderr)
+        self.assertNotIn("work", self.machines())
+
+    def test_attach_with_a_command_runs_it(self):
+        self.ade("create", "work")
+        attached = self.ade("attach", "work", "echo", "attached")
+        self.assertEqual(attached.returncode, 0, msg=attached.stderr)
+
     def test_unknown_workbench_is_reported(self):
         result = self.ade("status", "does-not-exist")
         self.assertNotEqual(result.returncode, 0)

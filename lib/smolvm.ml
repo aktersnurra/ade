@@ -156,8 +156,10 @@ let start ?ssh_auth_sock t name =
 let stop t name =
   succeeded t [ "machine"; "stop"; "--name"; Workbench_name.to_string name ]
 
+(* SmolVM asks for confirmation and refuses without a terminal. ADE has
+   already asked: ade rm requires --yes. *)
 let delete t name =
-  succeeded t [ "machine"; "delete"; "--name"; Workbench_name.to_string name ]
+  succeeded t [ "machine"; "delete"; "--name"; Workbench_name.to_string name; "--force" ]
 
 let exec t name command =
   let argv =
@@ -171,16 +173,23 @@ let exec_checked t name command =
   in
   succeeded t argv
 
+(* Without -i SmolVM discards piped stdin and still exits 0, so the command
+   would run on empty input and report success. *)
 let exec_with_stdin t name command ~stdin =
   let argv =
-    [ "machine"; "exec"; "--name"; Workbench_name.to_string name ] @ ("--" :: command)
+    [ "machine"; "exec"; "-i"; "--name"; Workbench_name.to_string name ] @ ("--" :: command)
   in
   t.runner (request t ~stdin argv)
 
 let attach t name ~command =
+  (* machine shell takes no command; a command gets an interactive exec on a
+     terminal instead. *)
   let argv =
-    [ "machine"; "shell"; "--name"; Workbench_name.to_string name ]
-    @ (match command with [] -> [] | command -> "--" :: command)
+    match command with
+    | [] -> [ "machine"; "shell"; "--name"; Workbench_name.to_string name ]
+    | command ->
+        [ "machine"; "exec"; "-i"; "-t"; "--name"; Workbench_name.to_string name ]
+        @ ("--" :: command)
   in
   (* Attachment must hand the terminal to the child so signals, resize and
      interactive streams behave as if the user ran the shell directly. *)
