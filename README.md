@@ -99,6 +99,23 @@ window, since it is installing software from the network. A failed script leaves
 the machine created and stopped; fix it and run `ade provision NAME`. A `sealed`
 workbench cannot declare `provision`, because installing packages needs a network.
 
+`provision` can also be a list, run in order in the same boot, to add your own
+setup after the shipped script without copying it. The first failure skips the
+rest:
+
+```toml
+provision = ["../provision/arch.sh", "work.provision.sh"]
+```
+
+Mounts are already in place while it runs, so a read-only mount of your
+dotfiles can be installed from:
+
+```sh
+# work.provision.sh, with ~/projects/dotagent mounted read-only at /opt/dotagent
+/opt/dotagent/install-claude
+ln -sfn /opt/nvim ~/.config/nvim
+```
+
 `provision/arch.sh` installs git, jujutsu, base-devel, openssh, ripgrep, fd,
 nodejs, npm and python, then Herdr (`herdr.dev/install.sh`) and Claude Code (its
 native installer). Agents run as root in the guest and may `pacman -S` more, so

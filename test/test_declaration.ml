@@ -233,12 +233,27 @@ let provision_is_relative_to_the_declaration () =
   match Declaration.load path with
   | Error error -> Alcotest.failf "load: %s" (Ade_error.to_string error)
   | Ok declaration ->
-      Alcotest.(check (option string)) "resolved"
-        (Some (Filename.concat (Filename.dirname path) "../provision/arch.sh"))
+      Alcotest.(check (list string)) "resolved"
+        [ Filename.concat (Filename.dirname path) "../provision/arch.sh" ]
+        (Declaration.provision declaration)
+
+(* A list runs in the order written, each path resolved like a single one. *)
+let provision_takes_a_list () =
+  let path =
+    write_temp
+      (replace_line ~find:{|provision = "../provision/arch.sh"|}
+         ~replace:{|provision = ["../provision/arch.sh", "/etc/ade/mine.sh"]|}
+         (provisioned ~posture:"" ~hosts:true))
+  in
+  match Declaration.load path with
+  | Error error -> Alcotest.failf "load: %s" (Ade_error.to_string error)
+  | Ok declaration ->
+      Alcotest.(check (list string)) "in order"
+        [ Filename.concat (Filename.dirname path) "../provision/arch.sh"; "/etc/ade/mine.sh" ]
         (Declaration.provision declaration)
 
 let provision_is_optional () =
-  Alcotest.(check (option string)) "none" None
+  Alcotest.(check (list string)) "none" []
     (Declaration.provision (load_ok valid_toml))
 
 let provision_changes_the_digest () =
@@ -353,6 +368,16 @@ let () =
                   ~find:{|image = "docker.io/library/ade-workstation@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"|}
                   ~replace:{|image = "docker.io/library/ade-workstation@sha256:abc"|}
                   valid_toml));
+          Alcotest.test_case "empty provision list" `Quick
+            (rejects "provision"
+               (replace_line ~find:{|provision = "../provision/arch.sh"|}
+                  ~replace:{|provision = []|}
+                  (provisioned ~posture:"" ~hosts:true)));
+          Alcotest.test_case "empty provision path" `Quick
+            (rejects "provision"
+               (replace_line ~find:{|provision = "../provision/arch.sh"|}
+                  ~replace:{|provision = ["../provision/arch.sh", ""]|}
+                  (provisioned ~posture:"" ~hosts:true)));
           Alcotest.test_case "sealed with provision" `Quick
             (rejects "provision"
                (provisioned ~posture:"sealed" ~hosts:false));
@@ -409,6 +434,7 @@ proxy = "127.0.0.1:3128"|} valid_toml));
       ( "image and provisioning",
         [ Alcotest.test_case "tag without digest" `Quick image_without_digest_is_accepted;
           Alcotest.test_case "provision path" `Quick provision_is_relative_to_the_declaration;
+          Alcotest.test_case "provision list" `Quick provision_takes_a_list;
           Alcotest.test_case "no provision" `Quick provision_is_optional;
           Alcotest.test_case "provision moves the digest" `Quick provision_changes_the_digest ] );
       ( "repositories",

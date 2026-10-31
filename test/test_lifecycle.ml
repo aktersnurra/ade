@@ -181,17 +181,25 @@ let removing_an_absent_machine_converges () =
 
 (* Provisioning installs the guest's tooling once, in a window where the guest
    has no identity and no credentials; the machine is stopped afterwards. *)
-let provisioned_declaration () =
-  let script = Filename.temp_file "ade-provision-" ".sh" in
-  let channel = open_out script in
-  output_string channel "echo provisioned\n";
-  close_out channel;
+let provisioned_declaration ?(scripts = [ "echo provisioned\n" ]) () =
+  let write body =
+    let script = Filename.temp_file "ade-provision-" ".sh" in
+    let channel = open_out script in
+    output_string channel body;
+    close_out channel;
+    Printf.sprintf "%S" script
+  in
+  let provision =
+    match List.map write scripts with
+    | [ script ] -> script
+    | scripts -> "[" ^ String.concat ", " scripts ^ "]"
+  in
   let path = Filename.temp_file "ade-decl-" ".toml" in
   let channel = open_out path in
   Printf.fprintf channel
     {|name = "work"
 image = "docker.io/menci/archlinuxarm:base-devel"
-provision = "%s"
+provision = %s
 
 [resources]
 cpus = 2
@@ -203,7 +211,7 @@ workspace_gib = 16
 posture = "public"
 
 |}
-    script;
+    provision;
   close_out channel;
   match Declaration.load path with
   | Ok declaration -> declaration
@@ -297,6 +305,33 @@ let creating_provisions_once_then_stops () =
   Alcotest.(check (list string)) "order" [ "create"; "start"; "exec"; "stop" ]
     (List.filter (fun c -> c <> "status") (calls fake));
   Alcotest.(check (list string)) "script on stdin" [ "echo provisioned\n" ] fake.stdins;
+  Alcotest.(check string) "stopped" "stopped" fake.state
+
+(* Several scripts run in order in one maintenance boot, so a workbench can
+   add its own setup to the shipped script without copying it. *)
+let provisioning_runs_each_script_in_one_boot () =
+  let fake, lifecycle = setup "absent" in
+  check_outcome "create" Lifecycle.Changed
+    (Lifecycle.create lifecycle
+       (provisioned_declaration ~scripts:[ "echo one\n"; "echo two\n" ] ()));
+  Alcotest.(check (list string)) "order" [ "create"; "start"; "exec"; "exec"; "stop" ]
+    (List.filter (fun c -> c <> "status") (calls fake));
+  Alcotest.(check (list string)) "scripts in order" [ "echo one\n"; "echo two\n" ]
+    (List.rev fake.stdins)
+
+let a_failed_script_skips_the_rest () =
+  let fake, lifecycle = setup "absent" in
+  fake.exec_status <- 1;
+  (match
+     Lifecycle.create lifecycle
+       (provisioned_declaration ~scripts:[ "echo one\n"; "echo two\n" ] ())
+   with
+   | Error (Ade_error.Runtime_failed { argv = [ "provision"; script ]; _ }) ->
+       Alcotest.(check bool) "names the first script" true
+         (String.starts_with ~prefix:(Filename.get_temp_dir_name ()) script)
+   | Ok _ -> Alcotest.fail "expected the failed script to be an error"
+   | Error error -> Alcotest.failf "unexpected: %s" (Ade_error.to_string error));
+  Alcotest.(check (list string)) "only the first ran" [ "echo one\n" ] fake.stdins;
   Alcotest.(check string) "stopped" "stopped" fake.state
 
 let a_failed_provision_stops_the_machine_and_reports () =
@@ -607,6 +642,8 @@ let () =
           Alcotest.test_case "rm forgets" `Quick removing_forgets_the_record ] );
       ( "provision",
         [ Alcotest.test_case "on create" `Quick creating_provisions_once_then_stops;
+          Alcotest.test_case "several scripts" `Quick provisioning_runs_each_script_in_one_boot;
+          Alcotest.test_case "failed script" `Quick a_failed_script_skips_the_rest;
           Alcotest.test_case "failure" `Quick a_failed_provision_stops_the_machine_and_reports;
           Alcotest.test_case "shutdown failure" `Quick failed_provision_reports_failed_shutdown;
           Alcotest.test_case "rerun" `Quick provision_reruns_on_a_stopped_machine;
