@@ -339,14 +339,21 @@ Run for real on Artix x86_64 with SmolVM 1.32.4: `create` with provisioning
 from `provision/arch.sh`, `start`, `exec`, `attach` with a command, `stop`,
 `provision` re-run, `pull` from a clone mount (jj imports the refs in a
 colocated repository), and `rm`. The allowlist is enforced by IP, not only by
-DNS: unlisted names and raw IPs are refused. Not yet run for real:
+DNS: unlisted names and raw IPs are refused.
+
+The proxied posture has run for real too: provisioning through the proxy, a
+listed host through, an unlisted one refused with a 403 and listed by `ade net
+pending`, then allowed by `ade net allow`. Bypassing the proxy, raw IPs and every
+other port on the proxy's host address are refused. With the proxy daemon
+killed the guest has no network, and `ade start` brings the proxy back without
+rebooting the VM. `restart` rotates the guard binding and drops session allows;
+`stop` closes the proxy. Not yet run for real:
 
 - `[ssh] mode = "dedicated_agent"`, `pass:` secrets and `[credentials.github]`.
   The GitHub token check assumes the response carries `repository_selection`
   and `repositories`; confirm on the first real run.
 - macOS arm64.
-- The egress proxy is tested on the host, not from inside a guest: whether
-  the guest reaches `network.proxy` (and only it) through
-  `--allow-cidr ADDRESS/32` is for the first real run.
+- The egress proxy without `[network.classifier]`; the classifier has only
+  been called with a bogus key.
 - The proxy log (`net/log` in the workbench's state) records every
   connection and is never rotated.
