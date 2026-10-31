@@ -43,6 +43,7 @@ hosts = [
   "mirror.archlinuxarm.org",
   "*.mirror.archlinuxarm.org",
   "herdr.dev",
+  "release-assets.githubusercontent.com",
   "claude.ai",
   "downloads.claude.ai",
   "api.anthropic.com",
