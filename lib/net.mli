@@ -37,6 +37,7 @@ val decider :
   record:(Egress.event -> unit) ->
   allowed:(unit -> string list) ->
   classify:classify option ->
+  notify:(Egress.target -> unit) ->
   Egress.target ->
   Egress_proxy.decision
 (** How the proxy decides a destination no pattern allows: revoked hosts and

@@ -62,6 +62,10 @@ class CliEndToEndTest(unittest.TestCase):
 
     def ade(self, *args, cwd=None, declarations_env=True, smolvm=None):
         env = dict(os.environ)
+        # Without a session bus the proxy's desktop notifications fail
+        # silently instead of popping up while the suite runs.
+        for key in ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY"):
+            env.pop(key, None)
         env["ADE_SMOLVM_BIN"] = str(smolvm or self.fake_runtime())
         env["ADE_STATE_ROOT"] = str(self.tmp / "state")
         env.pop("ADE_WORKBENCHES_DIR", None)

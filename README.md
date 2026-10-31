@@ -266,6 +266,12 @@ ade net allow work registry.yarnpkg.com      # until the workbench next starts
 ade net allow work registry.yarnpkg.com --always   # appended to work.allow
 ```
 
+A refused host that needs you also raises a desktop notification
+(`notify-send` on Linux, `osascript` on macOS), once per host until the
+workbench next starts, with the `ade net allow` line to run. A host the
+classifier denied does not notify, and nor does anything when no notifier or
+desktop session is available: the request is refused either way.
+
 `work.allow` sits next to `work.toml`, one pattern a line, so ADE never rewrites
 a file you wrote. The hosts, `work.allow` and the session approvals are read for
 every request, so all three apply to a running workbench; only `proxy` is fixed
