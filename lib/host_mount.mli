@@ -7,7 +7,12 @@
     stores, ADE's own state and declarations, and writable version-control
     metadata. *)
 
-type resolved = { source : string; guest : string; read_only : bool }
+type resolved = private {
+  source : string;
+  guest : string;
+  read_only : bool;
+  clone_name : string option;
+}
 (** [source] is the canonical host path, with every symlink resolved, so the
     path the runtime mounts is the path that was checked. *)
 
@@ -26,7 +31,8 @@ val resolve_all :
 
 val for_declaration :
   paths:State_paths.t -> Declaration.t -> (resolved list, Ade_error.t) result
-(** Resolves a declaration's mounts under the default policy for this host. *)
+(** Resolves a declaration's mounts under the default policy for this host.
+    Includes an outbox specification for clone mounts, but creates no directories. *)
 
 val volume_spec : resolved -> string
 (** The runtime's [HOST:GUEST[:ro]] form. *)

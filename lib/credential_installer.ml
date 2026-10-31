@@ -32,19 +32,9 @@ let checked result =
   | Ok { Process_runner.status; stderr; _ } ->
       Error (Ade_error.Runtime_failed { argv = [ "credential install" ]; status; stderr })
 
-let install ~smolvm ~name ~provider ~value ~expires_at ~now ~previous =
-  (* Validate before touching the guest: a credential that is empty, already
-     expired or long-lived is not what was asked for, and installing it would
-     replace a working generation with a broken one. *)
-  match Credential.validate ~now ~value ~expires_at with
-  | Error reason ->
-      Error
-        (Ade_error.Operation_refused
-           {
-             operation = "install credential";
-             reason = Credential.describe_validation_error reason;
-           })
-  | Ok () ->
+let install ~smolvm ~name ~(credential : Github_credential.minted) ~now ~previous =
+      let provider = Credential.Github in
+      let value = credential.value and expires_at = credential.expires_at in
       let number = Credential.next_number previous in
       let* () =
         checked

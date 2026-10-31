@@ -13,13 +13,13 @@ let key_path () =
   path
 
 let config ?(repositories = [ "owner/repo" ]) ?(permissions = [ ("contents", "write") ]) () =
-  {
+  Result.get_ok (Github_credential.validate {
     Github_credential.app_id = "123456";
     installation_id = "78901234";
     private_key = Secret.file ~path:(key_path ());
     repositories;
     permissions;
-  }
+  })
 
 let name_exn value =
   match Workbench_name.of_string value with
@@ -111,16 +111,12 @@ let the_minted_token_is_delivered_on_stdin () =
 
 (* An over-broad configuration must be refused before GitHub is contacted. *)
 let an_unscoped_configuration_never_reaches_github () =
-  let contacted = ref false in
-  let http ~url:_ ~bearer:_ ~body:_ =
-    contacted := true;
-    Ok (201, token_body)
-  in
-  let _, result = rotate ~http ~config:(config ~repositories:[] ()) () in
-  (match result with
-   | Ok _ -> Alcotest.fail "expected an unscoped configuration to be refused"
-   | Error _ -> ());
-  Alcotest.(check bool) "github not contacted" false !contacted
+  let result = Github_credential.validate
+      { app_id = "1"; installation_id = "2"; private_key = Secret.file ~path:"unused";
+        repositories = []; permissions = [ "contents", "write" ] } in
+  match result with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "unscoped configuration can reach exchange"
 
 (* A refused exchange must not install anything: the previous generation stays
    active rather than being replaced by nothing. *)
@@ -129,7 +125,9 @@ let a_refused_exchange_installs_nothing () =
   let fake, result = rotate ~http () in
   (match result with
    | Ok _ -> Alcotest.fail "expected a 401 to fail the rotation"
-   | Error _ -> ());
+   | Error (Ade_error.Github_failed (Github_error.Exchange_failed { status = 401; body })) ->
+       Alcotest.(check string) "provider body" {|{"message":"unauthorized"}|} body
+   | Error _ -> Alcotest.fail "provider cause was erased");
   Alcotest.(check bool) "nothing installed" false
     (List.exists
        (fun r -> r.Process_runner.stdin = Some minted_token)

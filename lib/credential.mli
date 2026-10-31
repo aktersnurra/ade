@@ -23,6 +23,7 @@ type generation = {
 type validation_error =
   | Empty_value
   | Already_expired
+  | Non_finite_time
   | Expiry_too_far of { seconds : float }
 
 val describe_validation_error : validation_error -> string

@@ -8,6 +8,9 @@ type state =
   | Created  (** defined but never started *)
   | Stopped
   | Running
+  | Booting
+  | Stopping
+  | Failed of string
 
 type t
 

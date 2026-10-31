@@ -126,13 +126,28 @@ let a_child_that_ignores_stdin_does_not_kill_the_host () =
   | Ok { status; _ } -> Alcotest.failf "status %d" status
   | Error e -> Alcotest.failf "run: %s" (Ade_error.to_string e)
 
+let large_duplex_streams_do_not_deadlock () =
+  let payload = String.make 2_000_000 'x' in
+  let request =
+    { Process_runner.executable = "/usr/bin/python3";
+      argv = [ "-c";
+        "import signal,sys; signal.alarm(3); sys.stdin.buffer.read(1); sys.stdout.buffer.write(b'y'*2000000); sys.stdout.buffer.flush(); rest=sys.stdin.buffer.read(); assert len(rest)==1999999" ];
+      env = []; stdin = Some payload; stdio = Process_runner.Capture }
+  in
+  match Process_runner.run request with
+  | Error error -> Alcotest.fail (Ade_error.to_string error)
+  | Ok output ->
+      Alcotest.(check int) "child completes before watchdog" 0 output.status;
+      Alcotest.(check int) "all output drained" 2_000_000 (String.length output.stdout)
+
 let () =
   Alcotest.run "process_runner"
     [ ( "argv",
         [ Alcotest.test_case "spaces" `Quick argument_with_spaces_stays_one_argument;
           Alcotest.test_case "diagnostics" `Quick diagnostics_omit_secret_bearing_values ] );
       ( "streams",
-        [ Alcotest.test_case "stdin" `Quick stdin_payload_reaches_the_child;
+        [ Alcotest.test_case "duplex backpressure" `Quick large_duplex_streams_do_not_deadlock;
+          Alcotest.test_case "stdin" `Quick stdin_payload_reaches_the_child;
           Alcotest.test_case "status" `Quick nonzero_status_is_reported;
           Alcotest.test_case "environment" `Quick environment_is_not_inherited;
           Alcotest.test_case "sigpipe" `Quick

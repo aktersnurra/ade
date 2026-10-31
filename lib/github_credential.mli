@@ -7,9 +7,9 @@
     The flow is: sign a short-lived JWT with the App's private key, exchange it
     for an installation token, install that token into guest tmpfs. ADE never
     stores the installation token; it mints a fresh one when the current
-    generation approaches expiry. *)
+    generation is replaced on restart. *)
 
-type config = {
+type input = {
   app_id : string;
   installation_id : string;
   private_key : Secret.t;
@@ -21,7 +21,10 @@ type config = {
   permissions : (string * string) list;  (** e.g. [("contents", "write")] *)
 }
 
-type error =
+type config
+(** Parsed, scoped configuration. Only [validate] and [load_config] construct it. *)
+
+type error = Github_error.t =
   | Missing_private_key of string
   | Invalid_config of string
   | Exchange_failed of { status : int; body : string }
@@ -35,12 +38,12 @@ val describe_error : error -> string
 val load_config : Otoml.t -> (config, error) result
 (** Read the [[credentials.github]] table of a workbench declaration. *)
 
-val validate : config -> (unit, error) result
+val validate : input -> (config, error) result
 (** Refuse a configuration that would mint an over-broad credential: no
     repositories, no permissions, a level other than read or write, or
     repositories under more than one owner. *)
 
-val request_body : config -> (string, error) result
+val request_body : config -> string
 (** The JSON body of the token request, carrying the declared repositories (by
     name) and permissions. This is what scopes the token. *)
 
@@ -49,9 +52,15 @@ type http_post =
 (** The HTTP boundary, abstract so the exchange is testable without contacting
     GitHub. *)
 
-val token_url : config -> string
+val private_key : config -> Secret.t
+(** The App key's locator, for checks that it resolves before a start. *)
 
-type minted = { value : string; expires_at : float }
+val token_url : config -> string
+val digest_hex : config -> string
+(** Stable identity of the configuration, including scope and key locator,
+    never the resolved private key. *)
+
+type minted = private { value : string; expires_at : float }
 (** A freshly minted installation token and when GitHub says it expires. *)
 
 val exchange :

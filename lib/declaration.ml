@@ -12,7 +12,7 @@ type network =
 
 type ssh =
   | Disabled
-  | Dedicated_agent of { key_ref : string }
+  | Dedicated_agent of { key_ref : Secret.t }
 
 type resources = {
   cpus : int;
@@ -34,7 +34,7 @@ type t = {
   ssh : ssh;
   herdr_enabled : bool;
   mounts : mount list;
-  github_credential : Otoml.t option;
+  github_credential : Github_credential.config option;
   anthropic_api_key_ref : string option;
 }
 
@@ -262,7 +262,9 @@ let parse_ssh table =
   | "disabled" -> Disabled
   | "dedicated_agent" ->
       let key_ref = as_string "ssh.key_ref" (require table "key_ref" "[ssh]") in
-      if key_ref = "" then fail "ssh.key_ref must not be empty";
+      let key_ref = match Secret.of_reference key_ref with
+        | Ok reference -> reference
+        | Error reason -> fail ("ssh.key_ref: " ^ reason) in
       Dedicated_agent { key_ref }
   | other ->
       fail
@@ -393,6 +395,10 @@ let parse_mounts = function
   | None -> []
   | Some (Otoml.TomlTableArray tables) | Some (Otoml.TomlArray tables) ->
       let mounts = List.map parse_mount tables in
+      let clone_names = List.filter_map (fun mount ->
+          match mount.mode with Clone -> Some (clone_name mount) | _ -> None) mounts in
+      if List.length clone_names <> List.length (List.sort_uniq String.compare clone_names) then
+        fail "duplicate clone repository name; clone identities must be unique";
       List.iteri
         (fun i a ->
           List.iteri
@@ -448,14 +454,20 @@ let parse ~path root =
     match find root "ssh" with Some table -> parse_ssh table | None -> Disabled
   in
   let mounts = parse_mounts (find root "mount") in
-  (* The credential table is carried through unparsed: each provider module
-     owns its own schema, and Declaration should not have to know them all. *)
+  (* Providers own their schemas, but parsing completes before any effects. *)
   let credentials = find root "credentials" in
   Option.iter
     (fun table -> reject_unknown ~context:"[credentials]" table [ "github"; "anthropic" ])
     credentials;
   let credential key = Option.bind credentials (fun table -> find table key) in
-  let github_credential = credential "github" in
+  let github_credential =
+    Option.map
+      (fun github ->
+        match Github_credential.load_config github with
+        | Ok config -> config
+        | Error error -> fail ("credentials.github: " ^ Github_credential.describe_error error))
+      (credential "github")
+  in
   (* Only a reference is accepted: the key itself never sits in a declaration,
      so it cannot be committed with one. *)
   let anthropic_api_key_ref =
@@ -487,11 +499,13 @@ let load path =
         | exception Not_found ->
             Error (Ade_error.Declaration_invalid { path; reason = "malformed table" }))
 
-(* Canonical rendering for the digest. Only ordering-insensitive collections are
-   sorted; names, paths and image references are used verbatim. *)
+(* JSON framing preserves field boundaries even when strings contain delimiters.
+   Only ordering-insensitive collections are sorted. *)
 let canonical d =
   let buffer = Buffer.create 512 in
-  let line key value = Buffer.add_string buffer (key ^ "=" ^ value ^ "\n") in
+  let line key value =
+    Buffer.add_string buffer (Yojson.Safe.to_string (`List [ `String key; `String value ]) ^ "\n") in
+  let strings values = Yojson.Safe.to_string (`List (List.map (fun value -> `String value) values)) in
   line "name" (Workbench_name.to_string d.name);
   line "image" (image_digest d);
   line "provision" (Option.value d.provision ~default:"");
@@ -504,27 +518,28 @@ let canonical d =
    | Public -> line "network" "public"
    | Allowlisted { hosts; cidrs } ->
        line "network" "allowlisted";
-       line "hosts" (String.concat "," (List.sort String.compare hosts));
-       line "cidrs" (String.concat "," (List.sort String.compare cidrs))
+       line "hosts" (strings (List.sort String.compare hosts));
+       line "cidrs" (strings (List.sort String.compare cidrs))
    | Proxied { hosts; proxy; classifier } ->
        line "network" "proxied";
-       line "hosts" (String.concat "," (List.sort String.compare hosts));
+       line "hosts" (strings (List.sort String.compare hosts));
        line "proxy" proxy;
        Option.iter
-         (fun c -> line "classifier" (c.model ^ " " ^ c.api_key_ref))
+         (fun c -> line "classifier" (strings [ c.model; c.api_key_ref ]))
          classifier);
   (match d.ssh with
    | Disabled -> line "ssh" "disabled"
    | Dedicated_agent { key_ref } ->
        line "ssh" "dedicated_agent";
-       line "ssh_key_ref" key_ref);
+       line "ssh_key_ref" (Secret.describe key_ref));
   line "herdr" (string_of_bool d.herdr_enabled);
+  Option.iter (fun config -> line "github" (Github_credential.digest_hex config)) d.github_credential;
   (* Declaration order is not meaningful, so mounts are sorted by guest path. *)
   List.iter
     (fun mount ->
       line "mount"
-        (Printf.sprintf "%s:%s:%s" mount.host mount.guest
-           (match mount.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone")))
+        (strings [ mount.host; mount.guest;
+                   (match mount.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone") ]))
     (List.sort (fun a b -> String.compare a.guest b.guest) d.mounts);
   Buffer.contents buffer
 

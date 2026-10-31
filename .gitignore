@@ -3,6 +3,7 @@
 .rpiv/
 artifacts/
 _build/
+.hegel/
 __pycache__/
 *.pyc
 .claude/writes.log

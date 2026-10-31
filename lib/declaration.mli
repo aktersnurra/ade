@@ -28,7 +28,7 @@ type network =
 
 type ssh =
   | Disabled
-  | Dedicated_agent of { key_ref : string }
+  | Dedicated_agent of { key_ref : Secret.t }
 
 type resources = {
   cpus : int;
@@ -80,10 +80,8 @@ val mounts : t -> mount list
 (** Declared mounts, in declaration order. Nothing is mounted unless declared,
     and a mount is read-only unless it says [mode = "rw"]. *)
 
-val github_credential : t -> Otoml.t option
-(** The raw [[credentials.github]] table, if declared. Left unparsed here so
-    the credential module owns its own schema; Declaration only decides whether
-    one was given. *)
+val github_credential : t -> Github_credential.config option
+(** Provider-owned parsing happens at declaration loading, before any effects. *)
 
 val anthropic_api_key_ref : t -> string option
 (** [[credentials.anthropic] api_key_ref], a secret reference such as
