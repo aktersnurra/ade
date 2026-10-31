@@ -148,7 +148,7 @@ let pull_command =
   let open Cmdliner in
   let repo =
     Arg.(value & pos 1 (some string) None & info [] ~docv:"REPO"
-           ~doc:"Only this clone mount; default is every one.")
+           ~doc:"Only this repository; default is every one.")
   in
   let run name repo =
     with_declaration name (fun lifecycle declaration ->
@@ -160,7 +160,7 @@ let pull_command =
   in
   Cmd.v
     (Cmd.info "pull"
-       ~doc:"Bring the agents' branches back from clone mounts as agents/*")
+       ~doc:"Bring the agents' branches back from the repositories as agents/*")
     Term.(const run $ name_argument $ repo)
 
 let rm_command =
@@ -386,7 +386,7 @@ let commands =
     simple_command ~warn:true "start" "Start the workbench" Lifecycle.start;
     simple_command "stop" "Stop the workbench" Lifecycle.stop;
     simple_command ~warn:true "restart" "Restart the workbench" Lifecycle.restart;
-    simple_command "refresh" "Mint a fresh GitHub token into the running workbench"
+    simple_command "refresh" "Hand new commits and a fresh GitHub token to the running workbench"
       Lifecycle.refresh;
     attach_command;
     exec_command;

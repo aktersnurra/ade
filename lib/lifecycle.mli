@@ -27,14 +27,15 @@ val provision : t -> Declaration.t -> (outcome, Ade_error.t) result
     [create] and [start] run it once, right after creating the machine. *)
 
 val refresh : t -> Declaration.t -> (outcome, Ade_error.t) result
-(** Mint and activate the next GitHub token in a running workbench. A stopped
-    workbench, or one without [[credentials.github]], converges as a no-op:
-    the next start mints a fresh token anyway. If minting fails, the active
-    token stays in place. *)
+(** Hand the host's new commits to a running workbench ({!Repo_sync}), then
+    mint and activate the next GitHub token. A stopped workbench, or one with
+    neither [[repo]] entries nor [[credentials.github]], converges as a no-op:
+    the next start does both anyway. If minting fails, the active token stays
+    in place. *)
 
 val pull : t -> Declaration.t -> repo:string option -> (string list, Ade_error.t) result
 (** Start the machine if needed, then bring the agent's branches back from the
-    clone mounts as [refs/remotes/agents/*]. See {!Pull}. *)
+    repositories handed to it as [refs/remotes/agents/*]. See {!Pull}. *)
 
 val remove : t -> Declaration.t -> (outcome, Ade_error.t) result
 (** Stop the machine if it runs, delete it, release its host agent and forget

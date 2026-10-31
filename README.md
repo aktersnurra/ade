@@ -65,8 +65,8 @@ ade attach work          # start if needed, then attach (Herdr, if enabled)
 ade exec work -- CMD
 ade status work
 ade stop work
-ade pull work [REPO]     # bring the agents' branches back from clone mounts
-ade refresh work         # mint a fresh GitHub token into the running workbench
+ade pull work [REPO]     # bring the agents' branches back from the repositories
+ade refresh work         # hand new commits and a fresh GitHub token to the running workbench
 ade net pending work     # requests a proxied workbench's proxy refused
 ade net allow work HOST  # let HOST through, until the next start or --always
 ade net revoke work HOST # take back an allow made this session
@@ -112,8 +112,8 @@ Nothing on the host is visible in a workbench unless its declaration mounts it:
 
 ```toml
 [[mount]]
-host = "~/code/project-a"
-guest = "/src/project-a"        # read-only unless mode = "rw"
+host = "~/reference/specs"
+guest = "/ref/specs"            # read-only unless mode = "rw"
 
 [[mount]]
 host = "~/scratch/data"
@@ -130,42 +130,57 @@ the jj operation log all act on the host the next time you run git or jj
 there. Guest paths may not overlap each other or `/workspace`, `/run` and
 the other system paths.
 
-### Clone mode for repositories
+A workbench takes at most six mounts. SmolVM boots eight, and ADE takes two,
+the inbox and outbox below; a seventh is refused when the declaration loads.
 
-A writable mount of a repository is a way out of the VM: git hooks, `.git/config`
+## Repositories
+
+A mounted repository is a way out of the VM: git hooks, `.git/config`
 (`core.fsmonitor`, filters, aliases) and jj's operation log all run on the host
-the next time you use that tree. So repositories use `mode = "clone"`:
+the next time you use that tree. So repositories are not mounted at all:
 
 ```toml
-[[mount]]
+[[repo]]
 host = "~/code/project-a"
-mode = "clone"                  # guest defaults to /src/project-a, read-only
 ```
 
-The agent clones into its own disk (`git clone /src/project-a /workspace/project-a`)
-and commits, branches and rebases freely. `ade pull work` then has the guest
-write `git bundle create /outbox/project-a.bundle --branches`, copies the regular-file export into private host staging, verifies that stable
-copy, and fetches it into your
-repository as `refs/remotes/agents/*` with object checking on. Your branches,
-working tree and config are never touched; review and merge agent branches like a
-colleague's. In a colocated jj repository, jj imports the refs on its next
-command. Only the bundle crosses: fetching straight from the guest's clone would
-run `upload-pack` inside a repository the guest controls.
+At every start ADE bundles the repository's `HEAD` and branches into the
+workbench's inbox, which the guest sees read-only at `/inbox`. The first start
+clones it into `/workspace/project-a`; each later start, and `ade refresh`,
+fetches it into `refs/remotes/host/*`, pruned so it mirrors your branches, and
+the agents rebase onto `host/main` when they want your new commits. Their own
+branches and working tree are never touched. A bundle is only rebuilt when the repository's refs changed. The guest
+sees committed history only: no working tree, untracked files or anything
+else on the host. In a colocated jj repository `HEAD` is `@-` and bookmarks are
+branches, so the agents see what you committed and bookmarked.
 
-A clone mount must be a git repository, and the repository's name (the last part
-of the host path) may use only letters, digits, `.`, `_` and `-`. `/outbox` is
-backed by ADE's own state directory for the workbench and is reserved. `git`
-must be on the host's `PATH`.
+`ade pull work` then has the guest write `git bundle create
+/outbox/project-a.bundle --branches`, copies the regular-file export into private
+host staging, verifies that stable copy, and fetches it into your repository as
+`refs/remotes/agents/*` with object checking on. Your branches, working tree and
+config are never touched; review and merge agent branches like a colleague's. In
+a colocated jj repository, jj imports the refs on its next command. Only the
+bundle crosses: fetching straight from the guest's clone would run `upload-pack`
+inside a repository the guest controls.
+
+A repository must be a git repository (a non-colocated jj repository is not),
+it is checked by the same rules as a mount, since its history is exposure even
+without one, and its name (the last part of the host path) may use only letters,
+digits, `.`, `_` and `-` and must be unique. `/inbox` and `/outbox` are backed
+by ADE's own state for the workbench and are reserved. `git` must be on the
+host's `PATH`. Repositories apply at every start, so adding or removing one
+needs no recreation; a removed one keeps its clone in `/workspace`, since it
+may hold work you have not pulled.
 
 Mounts, resources, the network and whether an SSH agent is forwarded are fixed
 when the machine is created; changing them takes effect after `ade rm` and
 `ade create`. ADE records what each machine was created with, so after such an
 edit `ade status` reports the drift, `start`, `attach`, `exec` and `pull` warn,
 and `create` refuses instead of claiming the machine matches. Creation manifests
-are versioned and record resolved host paths; `pull` uses those recorded repository
-targets even if the declaration or a symlink changes. Clone repository names must
-be unique within a workbench. The SSH key, credentials and Herdr apply at every
-start and are not drift.
+are versioned and record resolved host paths; `pull` uses the repository paths
+recorded at the last start, even if the declaration or a symlink has changed
+since. The SSH key, credentials, repositories and Herdr apply at every start
+and are not drift.
 
 Missing, unreadable, legacy or unsupported creation records are reported as
 **unknown**, not as a match. `create` and `pull` refuse to claim a match or infer
@@ -372,8 +387,8 @@ a relocated temporary filesystem. Hegel 0.25.0 or newer is a test-only dependenc
 
 Run for real on Artix x86_64 with SmolVM 1.32.4: `create` with provisioning
 from `provision/arch.sh`, `start`, `exec`, `attach` with a command, `stop`,
-`provision` re-run, `pull` from a clone mount (jj imports the refs in a
-colocated repository), and `rm`. The allowlist is enforced by IP, not only by
+`provision` re-run, `pull` (jj imports the refs in a colocated repository),
+and `rm`. The allowlist is enforced by IP, not only by
 DNS: unlisted names and raw IPs are refused.
 
 The proxied posture has run for real too: provisioning through the proxy, a

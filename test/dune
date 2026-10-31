@@ -96,3 +96,8 @@
  (name test_net)
  (modules test_net)
  (libraries ade alcotest unix threads.posix))
+
+(test
+ (name test_repo_sync)
+ (modules test_repo_sync)
+ (libraries ade alcotest unix))

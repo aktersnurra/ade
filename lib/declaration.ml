@@ -21,8 +21,9 @@ type resources = {
   workspace_gib : int;
 }
 
-type mount_mode = Read_only | Read_write | Clone
+type mount_mode = Read_only | Read_write
 type mount = { host : string; guest : string; mode : mount_mode }
+type repo = { host : string; name : string }
 
 type t = {
   path : string;
@@ -34,6 +35,7 @@ type t = {
   ssh : ssh;
   herdr_enabled : bool;
   mounts : mount list;
+  repos : repo list;
   github_credential : Github_credential.config option;
   anthropic_api_key_ref : string option;
 }
@@ -55,6 +57,7 @@ let network d = d.network
 let ssh d = d.ssh
 let herdr_enabled d = d.herdr_enabled
 let mounts d = d.mounts
+let repos d = d.repos
 let github_credential d = d.github_credential
 let anthropic_api_key_ref d = d.anthropic_api_key_ref
 
@@ -299,7 +302,7 @@ let parse_services table =
    carry host files), or the maintenance mount points. *)
 let reserved_guest_paths =
   [ "/bin"; "/boot"; "/dev"; "/etc"; "/lib"; "/lib64"; "/nix"; "/proc"; "/run";
-    "/sbin"; "/sys"; "/tmp"; "/usr"; "/var"; "/workspace"; "/outbox"; "/mnt/ade-export";
+    "/sbin"; "/sys"; "/tmp"; "/usr"; "/var"; "/workspace"; "/inbox"; "/outbox"; "/mnt/ade-export";
     "/mnt/ade-import" ]
 
 let is_within ~ancestor path =
@@ -332,30 +335,6 @@ let validate_guest_path guest =
       fail (Printf.sprintf "mount guest path %s overlaps reserved %s" quoted reserved)
   | None -> guest
 
-(* The repository's name is the last component of its host path. It becomes a
-   file name in /outbox and a directory under /workspace, so it is held to a
-   conservative alphabet rather than whatever the host path allowed. *)
-let clone_name mount =
-  let rec strip path =
-    if String.length path > 1 && path.[String.length path - 1] = '/' then
-      strip (String.sub path 0 (String.length path - 1))
-    else path
-  in
-  Filename.basename (strip mount.host)
-
-let validate_clone_name name =
-  let ok_char = function
-    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '.' | '_' | '-' -> true
-    | _ -> false
-  in
-  if name = "" || name = "." || name = ".." || name.[0] = '-'
-     || not (String.for_all ok_char name)
-  then
-    fail
-      (Printf.sprintf
-         "clone mount %s: the repository name must be letters, digits, '.', '_' and '-'"
-         (Filename.quote name))
-
 let parse_mount table =
   reject_unknown ~context:"[[mount]]" table [ "host"; "guest"; "mode" ];
   let host = as_string "mount.host" (require table "host" "[[mount]]") in
@@ -368,25 +347,23 @@ let parse_mount table =
         match as_string "mount.mode" value with
         | "ro" -> Read_only
         | "rw" -> Read_write
-        | "clone" -> Clone
+        | "clone" ->
+            fail
+              (Printf.sprintf
+                 "clone mounts became repositories: write [[repo]] with host = %S instead"
+                 host)
         | other ->
             fail
-              (Printf.sprintf "unknown mount mode %s (expected ro, rw or clone)"
+              (Printf.sprintf "unknown mount mode %s (expected ro or rw)"
                  (Filename.quote other)))
   in
-  (* Only a clone mount can leave the guest path out: it has a natural one. *)
-  let guest =
-    match (find table "guest", mode) with
-    | Some value, _ -> as_string "mount.guest" value
-    | None, Clone ->
-        let name = clone_name { host; guest = ""; mode } in
-        validate_clone_name name;
-        "/src/" ^ name
-    | None, _ -> as_string "mount.guest" (require table "guest" "[[mount]]")
-  in
-  if mode = Clone then validate_clone_name (clone_name { host; guest; mode });
-  let guest = validate_guest_path guest in
+  let guest = validate_guest_path (as_string "mount.guest" (require table "guest" "[[mount]]")) in
   { host; guest; mode }
+
+(* SmolVM 1.32.4 on x86_64 boots at most eight mounts (a ninth fails with
+   "no more IRQs are available"), and every workbench has an inbox and an
+   outbox. Refusing here beats a machine that never boots. *)
+let max_mounts = 6
 
 (* Nested guest mounts are refused until their semantics are qualified on the
    pinned runtime: which one wins, and whether a read-only inner mount really
@@ -395,10 +372,10 @@ let parse_mounts = function
   | None -> []
   | Some (Otoml.TomlTableArray tables) | Some (Otoml.TomlArray tables) ->
       let mounts = List.map parse_mount tables in
-      let clone_names = List.filter_map (fun mount ->
-          match mount.mode with Clone -> Some (clone_name mount) | _ -> None) mounts in
-      if List.length clone_names <> List.length (List.sort_uniq String.compare clone_names) then
-        fail "duplicate clone repository name; clone identities must be unique";
+      if List.length mounts > max_mounts then
+        fail
+          (Printf.sprintf "at most %d [[mount]] entries fit in a workbench; this one has %d"
+             max_mounts (List.length mounts));
       List.iteri
         (fun i a ->
           List.iteri
@@ -413,6 +390,45 @@ let parse_mounts = function
       mounts
   | Some _ -> fail "mount must be an array of tables ([[mount]])"
 
+(* The repository's name is the last component of its host path. It becomes a
+   file name in /inbox and /outbox and a directory under /workspace, so it is
+   held to a conservative alphabet rather than whatever the host path allowed. *)
+let repo_name host =
+  let rec strip path =
+    if String.length path > 1 && path.[String.length path - 1] = '/' then
+      strip (String.sub path 0 (String.length path - 1))
+    else path
+  in
+  let name = Filename.basename (strip host) in
+  let ok_char = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '.' | '_' | '-' -> true
+    | _ -> false
+  in
+  if name = "" || name = "." || name = ".." || name.[0] = '-'
+     || not (String.for_all ok_char name)
+  then
+    fail
+      (Printf.sprintf
+         "repo %s: the repository name must be letters, digits, '.', '_' and '-'"
+         (Filename.quote host));
+  name
+
+let parse_repo table =
+  reject_unknown ~context:"[[repo]]" table [ "host" ];
+  let host = as_string "repo.host" (require table "host" "[[repo]]") in
+  if host = "" then fail "repo.host must not be empty";
+  { host; name = repo_name host }
+
+let parse_repos = function
+  | None -> []
+  | Some (Otoml.TomlTableArray tables) | Some (Otoml.TomlArray tables) ->
+      let repos = List.map parse_repo tables in
+      let names = List.map (fun (repo : repo) -> repo.name) repos in
+      if List.length names <> List.length (List.sort_uniq String.compare names) then
+        fail "duplicate repository name; the last part of each repo.host must be unique";
+      repos
+  | Some _ -> fail "repo must be an array of tables ([[repo]])"
+
 let sub_table root key context =
   match find root key with
   | Some (Otoml.TomlTable _ as table) | Some (Otoml.TomlInlineTable _ as table) -> table
@@ -422,7 +438,7 @@ let sub_table root key context =
 let parse ~path root =
   reject_unknown ~context:"the declaration" root
     [ "name"; "image"; "provision"; "resources"; "network"; "services"; "ssh";
-      "mount"; "credentials" ];
+      "mount"; "repo"; "credentials" ];
   let name_value = as_string "name" (require root "name" "the declaration") in
   let name =
     match Workbench_name.of_string name_value with
@@ -454,6 +470,7 @@ let parse ~path root =
     match find root "ssh" with Some table -> parse_ssh table | None -> Disabled
   in
   let mounts = parse_mounts (find root "mount") in
+  let repos = parse_repos (find root "repo") in
   (* Providers own their schemas, but parsing completes before any effects. *)
   let credentials = find root "credentials" in
   Option.iter
@@ -483,7 +500,7 @@ let parse ~path root =
       (credential "anthropic")
   in
   {
-    path; name; image; provision; resources; network; ssh; herdr_enabled; mounts;
+    path; name; image; provision; resources; network; ssh; herdr_enabled; mounts; repos;
     github_credential; anthropic_api_key_ref;
   }
 
@@ -536,11 +553,14 @@ let canonical d =
   Option.iter (fun config -> line "github" (Github_credential.digest_hex config)) d.github_credential;
   (* Declaration order is not meaningful, so mounts are sorted by guest path. *)
   List.iter
-    (fun mount ->
+    (fun (mount : mount) ->
       line "mount"
         (strings [ mount.host; mount.guest;
-                   (match mount.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone") ]))
-    (List.sort (fun a b -> String.compare a.guest b.guest) d.mounts);
+                   (match mount.mode with Read_only -> "ro" | Read_write -> "rw") ]))
+    (List.sort (fun (a : mount) b -> String.compare a.guest b.guest) d.mounts);
+  List.iter
+    (fun (repo : repo) -> line "repo" repo.host)
+    (List.sort (fun (a : repo) b -> String.compare a.host b.host) d.repos);
   Buffer.contents buffer
 
 let creation_shape d =
@@ -558,9 +578,9 @@ let creation_shape d =
        fixed at creation. *)
     | Proxied { proxy; _ } -> [ "proxied"; "proxy " ^ proxy ]
   in
-  let mount m =
+  let mount (m : mount) =
     Printf.sprintf "%s:%s:%s" m.host m.guest
-      (match m.mode with Read_only -> "ro" | Read_write -> "rw" | Clone -> "clone")
+      (match m.mode with Read_only -> "ro" | Read_write -> "rw")
   in
   [ ("image", image_digest d);
     ( "resources",

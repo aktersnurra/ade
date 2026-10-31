@@ -1,23 +1,21 @@
 (* These are persisted facts, not capabilities to bypass Host_mount.resolve. *)
-type mount = { source : string; guest : string; read_only : bool; clone_name : string option }
+type mount = { source : string; guest : string; read_only : bool }
 type t = { name : Workbench_name.t; shape : (string * string) list; mounts : mount list }
 
 let ( let* ) = Result.bind
 let name t = t.name
-let clones t = List.filter_map (fun m -> Option.map (fun name -> name, m.source) m.clone_name) t.mounts
 
 let make declaration mounts =
   { name = Declaration.name declaration;
     shape = List.filter (fun (group, _) -> group <> "mounts") (Declaration.creation_shape declaration);
     mounts = List.map (fun (m : Host_mount.resolved) ->
-        { source = m.source; guest = m.guest; read_only = m.read_only; clone_name = m.clone_name }) mounts }
+        { source = m.source; guest = m.guest; read_only = m.read_only }) mounts }
 
 let mount_json m = `Assoc [ "source", `String m.source; "guest", `String m.guest;
-    "read_only", `Bool m.read_only;
-    "clone", (match m.clone_name with None -> `Null | Some name -> `String name) ]
+    "read_only", `Bool m.read_only ]
 
 let encode t =
-  Yojson.Safe.to_string (`Assoc [ "version", `Int 1;
+  Yojson.Safe.to_string (`Assoc [ "version", `Int 2;
       "name", `String (Workbench_name.to_string t.name);
       "shape", `List (List.map (fun (group, value) -> `List [ `String group; `String value ]) t.shape);
       "mounts", `List (List.map mount_json t.mounts) ])
@@ -41,19 +39,11 @@ let rec traverse f = function
   | x :: xs -> let* y = f x in let* ys = traverse f xs in Ok (y :: ys)
 let invalid () = Error "invalid creation manifest schema"
 let absolute path = not (Filename.is_relative path) && not (String.contains path '\000')
-let clone_name_valid name =
-  name <> "" && name <> "." && name <> ".." && name.[0] <> '-'
-  && String.for_all (function 'a'..'z' | 'A'..'Z' | '0'..'9' | '.' | '_' | '-' -> true | _ -> false) name
-
 let decode_mount = function
-  | `Assoc fields when keys fields [ "source"; "guest"; "read_only"; "clone" ] -> (
-      match member fields "source", member fields "guest", member fields "read_only", member fields "clone" with
-      | `String source, `String guest, `Bool read_only, clone when absolute source && absolute guest ->
-          let* clone_name = match clone with
-            | `Null -> Ok None
-            | `String name when clone_name_valid name && read_only -> Ok (Some name)
-            | _ -> invalid () in
-          Ok { source; guest; read_only; clone_name }
+  | `Assoc fields when keys fields [ "source"; "guest"; "read_only" ] -> (
+      match member fields "source", member fields "guest", member fields "read_only" with
+      | `String source, `String guest, `Bool read_only when absolute source && absolute guest ->
+          Ok { source; guest; read_only }
       | _ -> invalid ())
   | _ -> invalid ()
 
@@ -62,7 +52,7 @@ let decode text =
   | exception Yojson.Json_error reason -> Error reason
   | `Assoc fields when keys fields [ "version"; "name"; "shape"; "mounts" ] -> (
       match member fields "version", member fields "name", member fields "shape", member fields "mounts" with
-      | `Int 1, `String raw_name, `List pairs, `List mounts ->
+      | `Int 2, `String raw_name, `List pairs, `List mounts ->
           let* name = Result.map_error Workbench_name.error_reason (Workbench_name.of_string raw_name) in
           let* shape = traverse (function
               | `List [ `String group; `String value ] when List.mem group [ "image"; "resources"; "network"; "ssh" ] -> Ok (group, value)
@@ -71,10 +61,11 @@ let decode text =
           let* () = if List.equal String.equal groups [ "image"; "network"; "resources"; "ssh" ]
             then Ok () else invalid () in
           let* mounts = traverse decode_mount mounts in
-          let names = List.filter_map (fun m -> m.clone_name) mounts in
-          if List.length names <> List.length (List.sort_uniq String.compare names) then invalid ()
-          else Ok { name; shape; mounts }
-      | `Int version, _, _, _ when version <> 1 -> Error "unsupported creation manifest version"
+          Ok { name; shape; mounts }
+      (* Version 1 had clone mounts; such a machine has no inbox to sync. *)
+      | `Int 1, _, _, _ ->
+          Error "created by an older ADE with clone mounts; recreate it with ade rm and ade create"
+      | `Int _, _, _, _ -> Error "unsupported creation manifest version"
       | _ -> invalid ())
   | _ -> invalid ()
 

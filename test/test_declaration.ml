@@ -159,40 +159,39 @@ let load_ok contents =
   | Ok declaration -> declaration
   | Error error -> Alcotest.failf "expected success: %s" (Ade_error.to_string error)
 
-(* A clone mount is the safe way to hand over a repository: the guest gets it
-   read-only and works in its own copy. Its guest path defaults from the
-   repository's name, so the common case needs only the host path. *)
-let clone_mount_defaults_its_guest_path () =
-  let declaration =
-    load_ok (with_mounts "[[mount]]\nhost = \"~/code/project-a/\"\nmode = \"clone\"\n")
-  in
-  match Declaration.mounts declaration with
-  | [ mount ] ->
-      Alcotest.(check bool) "clone" true (mount.Declaration.mode = Declaration.Clone);
-      Alcotest.(check string) "guest" "/src/project-a" mount.Declaration.guest;
-      Alcotest.(check string) "name" "project-a" (Declaration.clone_name mount)
-  | mounts -> Alcotest.failf "expected one mount, got %d" (List.length mounts)
+(* A repository is handed to the guest as a bundle, not a mount. Its name
+   comes from the last part of the host path, so only that path is written. *)
+let repo_takes_its_name_from_the_host_path () =
+  let declaration = load_ok (with_mounts "[[repo]]\nhost = \"~/code/project-a/\"\n") in
+  match Declaration.repos declaration with
+  | [ repo ] ->
+      Alcotest.(check string) "host" "~/code/project-a/" repo.Declaration.host;
+      Alcotest.(check string) "name" "project-a" repo.Declaration.name
+  | repos -> Alcotest.failf "expected one repo, got %d" (List.length repos)
 
-let clone_mount_may_name_its_guest_path () =
-  let declaration =
-    load_ok
-      (with_mounts
-         "[[mount]]\nhost = \"/code/a\"\nguest = \"/ref/a\"\nmode = \"clone\"\n")
-  in
-  match Declaration.mounts declaration with
-  | [ mount ] -> Alcotest.(check string) "guest" "/ref/a" mount.Declaration.guest
-  | _ -> Alcotest.fail "expected one mount"
+(* The name becomes a file name in /inbox and /outbox and a path in
+   /workspace, so it is held to a conservative alphabet. *)
+let repo_names_are_conservative = fun host () ->
+  rejects "repository name" (with_mounts (Printf.sprintf "[[repo]]\nhost = %S\n" host)) ()
 
-(* The name becomes a file name in /outbox and a path in /workspace, so it is
-   held to a conservative alphabet. *)
-let clone_mount_names_are_conservative = fun host () ->
-  rejects "clone"
-    (with_mounts (Printf.sprintf "[[mount]]\nhost = %S\nmode = \"clone\"\n" host))
-    ()
+let clone_mounts_point_at_repo_entries () =
+  rejects "[[repo]]" (with_mounts "[[mount]]\nhost = \"/code/a\"\nmode = \"clone\"\n") ()
 
-let only_clone_mounts_may_omit_the_guest_path () =
-  rejects "guest"
-    (with_mounts "[[mount]]\nhost = \"/code/a\"\nmode = \"ro\"\n") ()
+let repos_change_the_identity_but_not_the_creation_shape () =
+  let plain = load_ok valid_toml in
+  let with_repo = load_ok (with_mounts "[[repo]]\nhost = \"/code/a\"\n") in
+  Alcotest.(check bool) "digest differs" false
+    (Declaration.digest_hex plain = Declaration.digest_hex with_repo);
+  Alcotest.(check bool) "shape unchanged" true
+    (Declaration.creation_shape plain = Declaration.creation_shape with_repo)
+
+(* SmolVM boots at most eight mounts and ADE takes two of them, so a seventh
+   is refused here instead of the machine failing to boot. *)
+let mounts n = List.init n (fun i ->
+    mount_table ~host:(Printf.sprintf "/data/%d" i) ~guest:(Printf.sprintf "/work/%d" i) ())
+  |> String.concat "\n"
+
+let six_mounts_fit () = ignore (load_ok (with_mounts (mounts 6)))
 
 let rejects_mount fragment ?mode ~guest () =
   rejects fragment (with_mounts (mount_table ?mode ~host:"/data" ~guest ())) ()
@@ -323,13 +322,14 @@ let allowlist_order_does_not_change_identity () =
       let digest hosts = Declaration.digest_hex (Result.get_ok (load_for_property (render hosts))) in
       Hegel.require tc (digest hosts = digest (List.rev hosts)))
 
-let clone_identity_uniqueness_is_enforced () =
-  Hegel.run_hegel_test ~database_key:"clone-identities" (fun tc ->
-      let names = Hegel.draw ~label:"clones" tc
+let repo_name_uniqueness_is_enforced () =
+  Hegel.run_hegel_test ~database_key:"repo-names" (fun tc ->
+      let names = Hegel.draw ~label:"repos" tc
           (Hegel.Generators.lists (Hegel.Generators.text ~alphabet:"ab" ~min_size:1 ()) ()) in
-      let mounts = List.mapi (fun i name -> mount_table ~host:("/source/" ^ name)
-          ~guest:("/src/repo-" ^ string_of_int i) ~mode:"clone" ()) names |> String.concat "\n" in
-      let result = load_for_property (with_mounts mounts) in
+      let repos = List.mapi (fun i name ->
+          Printf.sprintf "[[repo]]\nhost = %S\n" (Printf.sprintf "/source/%d/%s" i name)) names
+                  |> String.concat "\n" in
+      let result = load_for_property (with_mounts repos) in
       Hegel.require tc (Result.is_ok result =
         (List.length names = List.length (List.sort_uniq String.compare names))))
 
@@ -338,7 +338,7 @@ let () =
     [ ( "valid",
         [ Alcotest.test_case "credential identity property" `Quick declaration_identity_tracks_credential_scope;
           Alcotest.test_case "allowlist order property" `Quick allowlist_order_does_not_change_identity;
-          Alcotest.test_case "clone identity property" `Quick clone_identity_uniqueness_is_enforced;
+          Alcotest.test_case "repo name property" `Quick repo_name_uniqueness_is_enforced;
           Alcotest.test_case "loads" `Quick loads_valid;
           Alcotest.test_case "digest" `Quick digest_is_stable_and_sensitive ] );
       ( "invalid",
@@ -411,18 +411,24 @@ proxy = "127.0.0.1:3128"|} valid_toml));
           Alcotest.test_case "provision path" `Quick provision_is_relative_to_the_declaration;
           Alcotest.test_case "no provision" `Quick provision_is_optional;
           Alcotest.test_case "provision moves the digest" `Quick provision_changes_the_digest ] );
-      ( "clone mounts",
-        [ Alcotest.test_case "unique clone identities" `Quick
-            (rejects "duplicate clone"
-               (with_mounts (mount_table ~host:"/one/repo" ~guest:"/src/one" ~mode:"clone" ()
-                           ^ mount_table ~host:"/two/repo" ~guest:"/src/two" ~mode:"clone" ())));
-          Alcotest.test_case "default guest" `Quick clone_mount_defaults_its_guest_path;
-          Alcotest.test_case "named guest" `Quick clone_mount_may_name_its_guest_path;
-          Alcotest.test_case "space in name" `Quick (clone_mount_names_are_conservative "/code/my repo");
-          Alcotest.test_case "dotdot" `Quick (clone_mount_names_are_conservative "/code/..");
+      ( "repositories",
+        [ Alcotest.test_case "unique names" `Quick
+            (rejects "duplicate repository"
+               (with_mounts "[[repo]]\nhost = \"/one/repo\"\n[[repo]]\nhost = \"/two/repo\"\n"));
+          Alcotest.test_case "name from host" `Quick repo_takes_its_name_from_the_host_path;
+          Alcotest.test_case "space in name" `Quick (repo_names_are_conservative "/code/my repo");
+          Alcotest.test_case "dotdot" `Quick (repo_names_are_conservative "/code/..");
+          Alcotest.test_case "unknown key" `Quick
+            (rejects "unknown key" (with_mounts "[[repo]]\nhost = \"/code/a\"\nmode = \"ro\"\n"));
+          Alcotest.test_case "clone mode" `Quick clone_mounts_point_at_repo_entries;
+          Alcotest.test_case "identity, not shape" `Quick
+            repos_change_the_identity_but_not_the_creation_shape;
           Alcotest.test_case "outbox reserved" `Quick (rejects_mount "reserved" ~guest:"/outbox");
-          Alcotest.test_case "guest required otherwise" `Quick
-            only_clone_mounts_may_omit_the_guest_path ] );
+          Alcotest.test_case "inbox reserved" `Quick (rejects_mount "reserved" ~guest:"/inbox");
+          Alcotest.test_case "guest required" `Quick
+            (rejects "guest" (with_mounts "[[mount]]\nhost = \"/code/a\"\nmode = \"ro\"\n"));
+          Alcotest.test_case "six mounts" `Quick six_mounts_fit;
+          Alcotest.test_case "seven mounts" `Quick (rejects "at most 6" (with_mounts (mounts 7))) ] );
       ( "mounts",
         [ Alcotest.test_case "parse" `Quick mounts_parse_in_order_and_default_read_only;
           Alcotest.test_case "none by default" `Quick no_mounts_by_default;

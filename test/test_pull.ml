@@ -31,7 +31,6 @@ type world = {
   guest_clone : string;  (** stands in for /workspace/a inside the guest *)
   paths : State_paths.t;
   declaration : Declaration.t;
-  manifest : Creation_manifest.t;
   mutable guest_commands : string list list;
 }
 
@@ -66,9 +65,8 @@ workspace_gib = 16
 posture = "public"
 
 
-[[mount]]
+[[repo]]
 host = "%s"
-mode = "clone"
 |}
            host_repo));
   let declaration =
@@ -77,12 +75,16 @@ mode = "clone"
     | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
   in
   let paths = State_paths.make ~root:(Filename.concat home ".local/state/ade") () in
-  let mounts = Result.get_ok (Host_mount.for_declaration ~paths declaration) in
-  let manifest = Creation_manifest.make declaration mounts in
+  (* The repository is handed over for real, so pull reads the record the
+     sync wrote; the guest half of the sync is a no-op here. *)
+  let repos = Result.get_ok (Host_mount.repos_for_declaration ~paths declaration) in
   mkdir_p (State_paths.outbox_dir paths (Declaration.name declaration));
-  Result.get_ok (Creation_manifest.save ~paths manifest);
+  let guest = Smolvm.make ~executable:"/usr/bin/true" ~runner:(fun _ ->
+      Ok { Process_runner.status = 0; stdout = ""; stderr = "" }) in
+  Result.get_ok (Repo_sync.sync ~smolvm:guest ~runner:Process_runner.run ~git:git_exe ~paths
+                   ~name:(Declaration.name declaration) repos);
   {
-    home; host_repo; guest_clone; paths; declaration; manifest; guest_commands = [];
+    home; host_repo; guest_clone; paths; declaration; guest_commands = [];
   }
 
 (* The guest command is `git -C /workspace/a bundle create /outbox/a.bundle
@@ -112,7 +114,7 @@ let pull ?(host_runner = Process_runner.run) ~repo world guest =
     Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner world guest)
   in
   Pull.run ~smolvm ~runner:host_runner ~git:git_exe ~paths:world.paths
-    world.manifest ~repo
+    ~name:(Declaration.name world.declaration) ~repo
 
 let guest_commits_on_a_branch world =
   sh "cd %s && git checkout -q -b feature && %s git commit -q --allow-empty -m agent-work"
@@ -149,6 +151,16 @@ let a_named_repository_is_pulled () =
 let an_unknown_repository_is_refused () =
   let world = make_world () in
   match pull world Honest ~repo:(Some "nope") with
+  | Ok _ -> Alcotest.fail "expected a refusal"
+  | Error (Ade_error.Operation_refused _) ->
+      Alcotest.(check int) "guest never asked" 0 (List.length world.guest_commands)
+  | Error error -> Alcotest.failf "wrong error: %s" (Ade_error.to_string error)
+
+(* Only repositories that were handed over can be pulled into. *)
+let nothing_handed_over_is_refused () =
+  let world = make_world () in
+  Sys.remove (State_paths.repos_file world.paths (Declaration.name world.declaration));
+  match pull world Honest ~repo:None with
   | Ok _ -> Alcotest.fail "expected a refusal"
   | Error (Ade_error.Operation_refused _) ->
       Alcotest.(check int) "guest never asked" 0 (List.length world.guest_commands)
@@ -197,7 +209,7 @@ let a_file_that_is_not_a_bundle_is_refused () =
   in
   match
     Pull.run ~smolvm ~runner:Process_runner.run ~git:git_exe ~paths:world.paths
-      world.manifest ~repo:None
+      ~name:(Declaration.name world.declaration) ~repo:None
   with
   | Ok _ -> Alcotest.fail "expected a refusal"
   | Error _ ->
@@ -231,7 +243,7 @@ let lifecycle_pull world declaration =
           runner world Honest request) in
   let services = { Boot.start_agent = (fun ~name:_ ~mode:_ -> Alcotest.fail "unexpected agent");
       stop_agent = (fun _ -> Ok ()); install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
-      start_proxy = (fun _ -> Ok None); ensure_proxy = (fun _ -> Ok ()); stop_proxy = (fun _ -> Ok ()) } in
+      sync_repos = (fun ~smolvm:_ _ -> Ok ()); start_proxy = (fun _ -> Ok None); ensure_proxy = (fun _ -> Ok ()); stop_proxy = (fun _ -> Ok ()) } in
   let lifecycle = Lifecycle.make ~services ~smolvm ~paths:world.paths in
   (match Lifecycle.pull lifecycle declaration ~repo:None with
    | Ok _ -> () | Error error -> Alcotest.fail (Ade_error.to_string error));
@@ -270,6 +282,7 @@ let () =
             a_pull_brings_branches_back_without_touching_the_host_branches;
           Alcotest.test_case "named repository" `Quick a_named_repository_is_pulled;
           Alcotest.test_case "unknown repository" `Quick an_unknown_repository_is_refused;
+          Alcotest.test_case "nothing handed over" `Quick nothing_handed_over_is_refused;
           Alcotest.test_case "failing guest" `Quick a_failing_guest_bundle_is_an_error ] );
       ( "hostile outbox",
         [ Alcotest.test_case "stable artifact" `Quick

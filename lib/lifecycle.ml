@@ -56,8 +56,9 @@ let drift_of t declaration state =
 let create_machine t declaration =
   let* mounts = Host_mount.for_declaration ~paths:t.paths declaration in
   let manifest = Creation_manifest.make declaration mounts in
-  let* () = if Creation_manifest.clones manifest = [] then Ok ()
-    else State_paths.ensure_dir (State_paths.outbox_dir t.paths (Declaration.name declaration)) in
+  let name = Declaration.name declaration in
+  let* () = State_paths.ensure_dir (State_paths.inbox_dir t.paths name) in
+  let* () = State_paths.ensure_dir (State_paths.outbox_dir t.paths name) in
   let* () = Smolvm.create t.smolvm declaration ~mounts in
   Creation_manifest.save ~paths:t.paths manifest
 
@@ -206,30 +207,31 @@ let provision t declaration =
               Ok Changed))
 
 (* Tokens last an hour and are minted at start; this mints the next
-   generation into a running workbench without restarting the agents. A
-   stopped workbench has nothing to refresh: its next start mints anew. *)
+   generation into a running workbench without restarting the agents, and
+   hands it the host's new commits. A stopped workbench has nothing to
+   refresh: its next start does both anew. *)
 let refresh t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
+      let github = Declaration.github_credential declaration <> None in
       let* state = observe_settled t name in
       match state with
-      | Running when Declaration.github_credential declaration <> None ->
-          let* () = t.services.install_credentials ~smolvm:t.smolvm ~name declaration in
+      | Running when github || Declaration.repos declaration <> [] ->
+          let* () = t.services.sync_repos ~smolvm:t.smolvm declaration in
+          let* () =
+            if github then t.services.install_credentials ~smolvm:t.smolvm ~name declaration
+            else Ok ()
+          in
           Ok Changed
       | Running | Created | Stopped | Absent -> Ok Converged)
 
 let pull t declaration ~repo =
   with_lock t declaration (fun () ->
       let* _ = ensure_running t declaration in
-      let* recorded = Creation_manifest.load ~paths:t.paths (Declaration.name declaration) in
-      match recorded with
-      | None -> Error (Ade_error.Operation_refused
-          { operation = "pull"; reason = "no creation manifest; repository targets are unknown" })
-      | Some manifest -> (
-          match Process_runner.find_executable "git" with
-          | None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
-          | Some git -> Pull.run ~smolvm:t.smolvm ~runner:Process_runner.run ~git
-              ~paths:t.paths manifest ~repo))
+      match Process_runner.find_executable "git" with
+      | None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
+      | Some git -> Pull.run ~smolvm:t.smolvm ~runner:Process_runner.run ~git
+          ~paths:t.paths ~name:(Declaration.name declaration) ~repo)
 
 let remove t declaration =
   with_lock t declaration (fun () ->

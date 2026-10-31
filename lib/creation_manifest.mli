@@ -5,7 +5,6 @@ type t
 
 val make : Declaration.t -> Host_mount.resolved list -> t
 val name : t -> Workbench_name.t
-val clones : t -> (string * string) list
 val changes : recorded:t -> current:t -> string list
 val encode : t -> string
 val decode : string -> (t, string) result

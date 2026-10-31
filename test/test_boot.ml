@@ -67,6 +67,10 @@ let services world =
         if world.fail_credentials then
           Error (Ade_error.Operation_refused { operation = "credentials"; reason = "boom" })
         else Ok ());
+    sync_repos =
+      (fun ~smolvm:_ _ ->
+        note world "repos";
+        Ok ());
     (* Only a proxied declaration starts a proxy, so only that is noted; the
        release at every start and stop is silent. *)
     start_proxy =
@@ -151,7 +155,7 @@ let work_start_orders_agent_boot_credentials () =
   let world, smolvm, paths = setup () in
   let declaration = with_agent () in
   expect_ok "start" (start world smolvm paths declaration);
-  Alcotest.check log "order" [ "agent start"; "machine start"; "credentials" ] (events world);
+  Alcotest.check log "order" [ "agent start"; "machine start"; "repos"; "credentials" ] (events world);
   Alcotest.(check bool) "populated" true (match world.agent_mode with Some (Ssh_agent.With_identity _) -> true | _ -> false);
   Alcotest.(check (option string)) "declared identity" (Some "pass entry ade/work-ssh")
     world.agent_identity;
@@ -171,7 +175,7 @@ let no_agent_without_ssh () =
   let world, smolvm, paths = setup () in
   let declaration = without_agent () in
   expect_ok "start" (start world smolvm paths declaration);
-  Alcotest.check log "order" [ "machine start"; "credentials" ] (events world);
+  Alcotest.check log "order" [ "machine start"; "repos"; "credentials" ] (events world);
   Alcotest.(check bool) "no socket" false (List.mem_assoc "SSH_AUTH_SOCK" world.start_env);
   Alcotest.(check bool) "no record" false (record_exists paths declaration)
 
@@ -191,7 +195,7 @@ let failed_credentials_stop_machine_and_agent () =
   world.fail_credentials <- true;
   expect_error "start" (start world smolvm paths declaration);
   Alcotest.check log "undone"
-    [ "agent start"; "machine start"; "credentials"; "machine stop"; "agent stop" ]
+    [ "agent start"; "machine start"; "repos"; "credentials"; "machine stop"; "agent stop" ]
     (events world);
   Alcotest.(check bool) "forgotten" false (record_exists paths declaration)
 
@@ -203,7 +207,7 @@ let leftover_agent_is_stopped_first () =
   world.log <- [];
   expect_ok "second" (start world smolvm paths declaration);
   Alcotest.check log "replaced"
-    [ "agent stop"; "agent start"; "machine start"; "credentials" ] (events world)
+    [ "agent stop"; "agent start"; "machine start"; "repos"; "credentials" ] (events world)
 
 (* A dead agent's pid may belong to another process by now. *)
 let dead_agent_is_not_signalled () =
@@ -236,7 +240,7 @@ let proxied_start_runs_the_proxy_first () =
   let world, smolvm, paths = setup () in
   expect_ok "start" (start world smolvm paths (proxied ()));
   Alcotest.check log "order"
-    [ "proxy start"; "machine start"; "machine exec"; "machine exec"; "credentials" ]
+    [ "proxy start"; "machine start"; "machine exec"; "machine exec"; "repos"; "credentials" ]
     (events world);
   Alcotest.(check bool) "host mediation token" true
     (List.mem_assoc "SMOLVM_INTERCEPTOR_TOKEN" world.start_env)
@@ -244,7 +248,7 @@ let proxied_start_runs_the_proxy_first () =
 let unproxied_start_writes_no_proxy_config () =
   let world, smolvm, paths = setup () in
   expect_ok "start" (start world smolvm paths (without_agent ()));
-  Alcotest.check log "order" [ "machine start"; "credentials" ] (events world)
+  Alcotest.check log "order" [ "machine start"; "repos"; "credentials" ] (events world)
 
 let failed_agent_release_keeps_recovery_record () =
   let world, smolvm, paths = setup () in
@@ -290,6 +294,7 @@ let failure_paths_preserve_recovery_evidence () =
           else (agent_live := false; Ok ()));
         install_credentials = (fun ~smolvm:_ ~name:_ _ ->
           if fail_credentials then error "credentials" else Ok ());
+        sync_repos = (fun ~smolvm:_ _ -> Ok ());
         start_proxy = (fun _ -> Ok None);
         ensure_proxy = (fun _ -> Ok ());
         stop_proxy = (fun _ -> Ok ()) } in

@@ -37,12 +37,7 @@ type resources = {
   workspace_gib : int;
 }
 
-type mount_mode =
-  | Read_only
-  | Read_write
-  | Clone
-      (** Mounted read-only; the agent clones it into its own disk and changes
-          come back as a git bundle ({!Pull}), never through the mount. *)
+type mount_mode = Read_only | Read_write
 
 type mount = { host : string; guest : string; mode : mount_mode }
 (** A host directory made visible in the guest. [host] is as written, which may
@@ -50,8 +45,11 @@ type mount = { host : string; guest : string; mode : mount_mode }
     is validated here: absolute, in normal form, clear of reserved guest paths
     and of every other mount. *)
 
-val clone_name : mount -> string
-(** The repository's name: the last component of its host path. *)
+type repo = { host : string; name : string }
+(** A host git repository handed to the guest as a bundle ({!Repo_sync}) and
+    brought back as one ({!Pull}); it is never mounted. [host] is as written;
+    {!Host_mount} resolves and polices it. [name] is the last component of
+    [host], held to letters, digits, [.], [_] and [-], and unique. *)
 
 type t
 
@@ -78,7 +76,12 @@ val herdr_enabled : t -> bool
 
 val mounts : t -> mount list
 (** Declared mounts, in declaration order. Nothing is mounted unless declared,
-    and a mount is read-only unless it says [mode = "rw"]. *)
+    and a mount is read-only unless it says [mode = "rw"]. At most six fit:
+    SmolVM boots eight, and every workbench has an inbox and an outbox. *)
+
+val repos : t -> repo list
+(** Declared repositories, in declaration order. They are synced at every
+    start, so they are not part of {!creation_shape}. *)
 
 val github_credential : t -> Github_credential.config option
 (** Provider-owned parsing happens at declaration loading, before any effects. *)

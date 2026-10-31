@@ -8,6 +8,7 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
+  sync_repos : smolvm:Smolvm.t -> Declaration.t -> (unit, Ade_error.t) result;
   start_proxy : Declaration.t -> (Egress_guard.binding option, Ade_error.t) result;
   ensure_proxy : Declaration.t -> (unit, Ade_error.t) result;
   stop_proxy : Workbench_name.t -> (unit, Ade_error.t) result;
@@ -57,12 +58,26 @@ let install_credentials ~smolvm ~name declaration =
   let* () = install_github ~smolvm ~name declaration in
   install_anthropic ~smolvm ~name declaration
 
+(* git is looked up only when there is something to bundle; with no
+   repositories the sync just clears the inbox and the record. *)
+let sync_repos ~paths ~smolvm declaration =
+  let* repos = Host_mount.repos_for_declaration ~paths declaration in
+  let* git =
+    match repos, Process_runner.find_executable "git" with
+    | [], _ -> Ok "git"
+    | _, Some git -> Ok git
+    | _, None -> Error (Ade_error.Runtime_unavailable { executable = "git" })
+  in
+  Repo_sync.sync ~smolvm ~runner:Process_runner.run ~git ~paths
+    ~name:(Declaration.name declaration) repos
+
 let default_services ~paths =
   {
     start_agent =
       (fun ~name ~mode -> Ssh_agent.start ~paths ~name ~mode ());
     stop_agent = (fun agent -> Ssh_agent.stop agent);
     install_credentials;
+    sync_repos = sync_repos ~paths;
     start_proxy = (fun declaration -> Net.start ~paths declaration);
     ensure_proxy = (fun declaration -> Net.ensure ~paths declaration);
     stop_proxy = (fun name -> Net.stop ~paths name);
@@ -170,7 +185,9 @@ let start ~services ~smolvm ~paths ~purpose declaration =
             let* () = Net.configure_guest ~smolvm ~name declaration in
             match purpose with
             | Maintenance -> Ok ()
-            | Work -> services.install_credentials ~smolvm ~name declaration
+            | Work ->
+                let* () = services.sync_repos ~smolvm declaration in
+                services.install_credentials ~smolvm ~name declaration
           in
           match configured with
           | Ok () -> Ok ()

@@ -14,12 +14,11 @@ Copy `workbenches/work-offline.toml` (or any declaration) to
 `~/.config/ade/workbenches/smoke.toml`, with `provision/` next to that
 directory if you keep the provision line. Run `ade doctor smoke` once it is in
 place. Remove `[ssh]` and `[credentials.github]`, so no key
-or token is involved, and add a clone mount of a throwaway repository:
+or token is involved, and add a throwaway repository:
 
 ```toml
-[[mount]]
+[[repo]]
 host = "~/scratch/smoke-repo"     # a real git repo with one commit
-mode = "clone"
 ```
 
 Keep the allowlist and `provision = "../provision/arch.sh"` if you want to test
@@ -32,12 +31,12 @@ ade status smoke      # running
 ade exec smoke -- uname -m
 ```
 
-## 2. Mounts and the outbox
+## 2. The inbox and the outbox
 
 ```sh
-ade exec smoke -- ls -l /src/smoke-repo      # visible, read-only?
-ade exec smoke -- touch /src/smoke-repo/x    # must fail: read-only
-ade exec smoke -- git clone /src/smoke-repo /workspace/smoke-repo
+ade exec smoke -- ls -l /inbox                # smoke-repo.bundle, read-only?
+ade exec smoke -- touch /inbox/x              # must fail: read-only
+ade exec smoke -- git -C /workspace/smoke-repo log --oneline   # cloned at start
 ade exec smoke -- sh -c 'cd /workspace/smoke-repo && git switch -c agent && echo hi > f && git add f && git -c user.name=a -c user.email=a@a commit -m agent'
 ade pull smoke
 git -C ~/scratch/smoke-repo branch -r        # agents/agent present
@@ -45,7 +44,7 @@ jj log -r 'remote_bookmarks()' -R ~/scratch/smoke-repo   # if colocated
 ls -ln ~/.local/state/ade/*/outbox 2>/dev/null           # which uid owns the bundle
 ```
 
-Questions this answers: does `:ro` hold, which uid the outbox files get on the
+Questions this answers: does `:ro` hold on the inbox, which uid the outbox files get on the
 host, whether the guest can write `/outbox`, whether jj imports the ref.
 
 ## 3. Network

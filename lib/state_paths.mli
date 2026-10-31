@@ -13,9 +13,17 @@ val make : ?root:string -> unit -> t
 
 val root : t -> string
 val lock_file : t -> Workbench_name.t -> string
+val inbox_dir : t -> Workbench_name.t -> string
+(** Where the host leaves a git bundle of each repository for the guest,
+    mounted read-only at [/inbox]. *)
+
 val outbox_dir : t -> Workbench_name.t -> string
-(** Where a clone workbench's guest drops git bundles. Everything in it is
+(** Where the guest drops git bundles for [ade pull]. Everything in it is
     written by the guest and so untrusted until validated. *)
+
+val repos_file : t -> Workbench_name.t -> string
+(** The repositories last handed to the guest, by name, with their host
+    paths and the refs each bundle holds. *)
 
 val ssh_agent_file : t -> Workbench_name.t -> string
 (** Where the running workbench's host agent is recorded, so a later [stop] can
