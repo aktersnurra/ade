@@ -1,8 +1,7 @@
-(** Bringing an agent's work back from a clone workbench.
+(** Bringing an agent's work back from the guest.
 
-    A clone mount gives the guest a read-only repository and an [/outbox]. The
-    agent clones into [/workspace/NAME] on its own disk; this module asks the
-    guest to write a git bundle of its branches into the outbox, validates the
+    {!Repo_sync} clones each repository into [/workspace/NAME] on the guest's
+    own disk; this module asks the guest to write a git bundle of its branches into the outbox, validates the
     bundle on the host, and fetches it into the user's repository as
     [refs/remotes/agents/*].
 
@@ -16,10 +15,11 @@ val run :
   runner:Process_runner.t ->
   git:string ->
   paths:State_paths.t ->
-  Creation_manifest.t ->
+  name:Workbench_name.t ->
   repo:string option ->
   (string list, Ade_error.t) result
-(** Pull every clone mount, or just [repo]. The machine must be running. Returns
-    the names pulled. [git] is an absolute path. Targets come only from the
-    recorded creation manifest, never a re-resolved declaration. The caller
-    holds the workbench lock for the entire export and import. *)
+(** Pull every repository last handed to the guest, or just [repo]. The machine
+    must be running. Returns the names pulled. [git] is an absolute path.
+    Targets come only from {!Repo_sync.recorded}, never a re-resolved
+    declaration. The caller holds the workbench lock for the entire export and
+    import. *)

@@ -45,7 +45,9 @@ let workbench_dir t name =
 (* Locks outlive deletable workbench state: all contenders must open one inode. *)
 let lock_file t name =
   Filename.concat (Filename.concat t.root "locks") (Workbench_name.to_string name ^ ".lock")
+let inbox_dir t name = Filename.concat (workbench_dir t name) "inbox"
 let outbox_dir t name = Filename.concat (workbench_dir t name) "outbox"
+let repos_file t name = Filename.concat (workbench_dir t name) "repos"
 let ssh_agent_file t name = Filename.concat (workbench_dir t name) "ssh-agent"
 let created_file t name = Filename.concat (workbench_dir t name) "created"
 let credentials_dir t name = Filename.concat (workbench_dir t name) "credentials"

@@ -1,9 +1,10 @@
-type resolved = { source : string; guest : string; read_only : bool; clone_name : string option }
+type resolved = { source : string; guest : string; read_only : bool }
+type repo = { name : string; source : string }
 type policy = { home : string; protected : string list }
 
 let ( let* ) = Result.bind
 
-let refused reason = Error (Ade_error.Operation_refused { operation = "mount"; reason })
+let refused ?(operation = "mount") reason = Error (Ade_error.Operation_refused { operation; reason })
 
 (* Protected locations are compared after resolution, so a protected path that
    is itself a symlink (macOS /var -> /private/var, a dotfiles checkout) is
@@ -68,8 +69,13 @@ let find_vcs_metadata root =
   in
   walk 0 root
 
-let resolve policy (mount : Declaration.mount) =
-  let written = expand_home ~home:policy.home mount.Declaration.host in
+(* Where a host path really is, refused when handing it to the guest would
+   expose more than the user meant: the home directory or an ancestor of it,
+   or a protected store. A repository is checked the same way as a mount: its
+   history in a bundle is exposure even without a mount. *)
+let resolve_source ~operation policy host =
+  let refused = refused ~operation in
+  let written = expand_home ~home:policy.home host in
   let* () =
     if Filename.is_relative written then
       refused (Printf.sprintf "host path %s must be absolute or start with ~/" (Filename.quote written))
@@ -108,15 +114,11 @@ let resolve policy (mount : Declaration.mount) =
           (Printf.sprintf "host path %s overlaps protected %s" quoted (Filename.quote protected))
     | None -> Ok ()
   in
-  let read_only = mount.Declaration.mode <> Declaration.Read_write in
-  let* () =
-    (* Cloning needs history to bundle back, so anything that is not a git
-       repository is refused here rather than at the first pull. *)
-    if mount.Declaration.mode = Declaration.Clone
-       && not (Sys.file_exists (Filename.concat source ".git"))
-    then refused (Printf.sprintf "clone mount %s is not a git repository" quoted)
-    else Ok ()
-  in
+  Ok source
+
+let resolve policy (mount : Declaration.mount) =
+  let* source = resolve_source ~operation:"mount" policy mount.Declaration.host in
+  let read_only = mount.Declaration.mode = Declaration.Read_only in
   let* () =
     if read_only then Ok ()
     else
@@ -126,12 +128,17 @@ let resolve policy (mount : Declaration.mount) =
             (Printf.sprintf
                "writable mount %s contains version-control metadata at %s; mount it \
                 read-only instead"
-               quoted (Filename.quote found))
+               (Filename.quote source) (Filename.quote found))
       | None -> Ok ()
   in
-  let clone_name = match mount.Declaration.mode with
-    | Declaration.Clone -> Some (Declaration.clone_name mount) | _ -> None in
-  Ok { source; guest = mount.Declaration.guest; read_only; clone_name }
+  Ok { source; guest = mount.Declaration.guest; read_only }
+
+(* Bundling needs git history, so anything that is not a git repository is
+   refused here rather than at the first start. *)
+let resolve_repo policy (repo : Declaration.repo) =
+  let* source = resolve_source ~operation:"repo" policy repo.Declaration.host in
+  if Sys.file_exists (Filename.concat source ".git") then Ok { name = repo.Declaration.name; source }
+  else refused ~operation:"repo" (Printf.sprintf "%s is not a git repository" (Filename.quote source))
 
 let resolve_all policy mounts =
   List.fold_left
@@ -142,30 +149,47 @@ let resolve_all policy mounts =
     (Ok []) mounts
   |> Result.map List.rev
 
-(* The guest returns bundles through one writable directory that belongs to
-   ADE, not to the user, so it needs none of the user-path policing. *)
-let outbox ~paths declaration =
-  let source = State_paths.outbox_dir paths (Declaration.name declaration) in
-  { source; guest = "/outbox"; read_only = false; clone_name = None }
+(* Repositories reach the guest through the inbox, which only the host
+   writes, and come back through the outbox, which only the guest writes.
+   Both belong to ADE, not to the user, so they need none of the user-path
+   policing. Every workbench has both, so a repository can be added without
+   recreating the machine. *)
+let fixed ~paths declaration =
+  let name = Declaration.name declaration in
+  [ { source = State_paths.inbox_dir paths name; guest = "/inbox"; read_only = true };
+    { source = State_paths.outbox_dir paths name; guest = "/outbox"; read_only = false } ]
+
+let policy_for ~paths declaration =
+  match Sys.getenv_opt "HOME" with
+  | None | Some "" -> Error "HOME is not set, so host paths cannot be checked"
+  | Some home ->
+      let declarations_dir = Filename.dirname (canonical (Declaration.path declaration)) in
+      Ok (default_policy ~home ~state_root:(State_paths.root paths) ~declarations_dir)
 
 let for_declaration ~paths declaration =
   match Declaration.mounts declaration with
-  | [] -> Ok []
-  | mounts -> (
-      match Sys.getenv_opt "HOME" with
-      | None | Some "" -> refused "HOME is not set, so mounts cannot be checked"
-      | Some home ->
-          let declarations_dir =
-            Filename.dirname (canonical (Declaration.path declaration))
-          in
-          let* resolved =
-            resolve_all
-              (default_policy ~home ~state_root:(State_paths.root paths) ~declarations_dir)
-              mounts
-          in
-          if List.exists (fun m -> m.Declaration.mode = Declaration.Clone) mounts then
-            Ok (resolved @ [ outbox ~paths declaration ])
-          else Ok resolved)
+  | [] -> Ok (fixed ~paths declaration)
+  | mounts ->
+      let* policy = Result.map_error (fun reason ->
+          Ade_error.Operation_refused { operation = "mount"; reason })
+          (policy_for ~paths declaration) in
+      let* resolved = resolve_all policy mounts in
+      Ok (resolved @ fixed ~paths declaration)
 
-let volume_spec resolved =
+let repos_for_declaration ~paths declaration =
+  match Declaration.repos declaration with
+  | [] -> Ok []
+  | repos ->
+      let* policy = Result.map_error (fun reason ->
+          Ade_error.Operation_refused { operation = "repo"; reason })
+          (policy_for ~paths declaration) in
+      List.fold_left
+        (fun acc repo ->
+          let* acc = acc in
+          let* resolved = resolve_repo policy repo in
+          Ok (resolved :: acc))
+        (Ok []) repos
+      |> Result.map List.rev
+
+let volume_spec (resolved : resolved) =
   resolved.source ^ ":" ^ resolved.guest ^ if resolved.read_only then ":ro" else ""

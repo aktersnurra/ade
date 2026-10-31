@@ -11,6 +11,7 @@ let services =
              ~populated:(match mode with Ssh_agent.Empty -> false | Ssh_agent.With_identity _ -> true)));
     stop_agent = (fun _ -> Ok ());
     install_credentials = (fun ~smolvm:_ ~name:_ _ -> Ok ());
+    sync_repos = (fun ~smolvm:_ _ -> Ok ());
     start_proxy = (fun _ -> Ok None);
     ensure_proxy = (fun _ -> Ok ());
     stop_proxy = (fun _ -> Ok ());
@@ -436,11 +437,12 @@ let another_process_holding_the_lock_refuses () =
 
 (* Refresh only ever installs into a running machine that has a GitHub App;
    anything else is left for the next start, which mints anyway. *)
-let refresh_with ~state ~github =
-  let installs = ref 0 in
+let refresh_with ?(repo = false) ~state ~github () =
+  let installs = ref 0 and syncs = ref 0 in
   let services =
     { services with
-      Boot.install_credentials = (fun ~smolvm:_ ~name:_ _ -> incr installs; Ok ()) }
+      Boot.install_credentials = (fun ~smolvm:_ ~name:_ _ -> incr installs; Ok ());
+      sync_repos = (fun ~smolvm:_ _ -> incr syncs; Ok ()) }
   in
   let fake = { state; calls = []; last_argv = []; stdins = []; exec_status = 0; stop_status = 0 } in
   let smolvm = Smolvm.make ~executable:"/usr/bin/true" ~runner:(runner fake) in
@@ -448,14 +450,16 @@ let refresh_with ~state ~github =
   let lifecycle = Lifecycle.make ~services ~smolvm ~paths in
   let base = declaration () in
   let declaration =
-    if not github then base
+    if not (github || repo) then base
     else
       let source = In_channel.with_open_bin (Declaration.path base) In_channel.input_all in
       let path = Filename.temp_file "ade-work-" ".toml" in
       Out_channel.with_open_bin path (fun channel ->
           Out_channel.output_string channel
             (source
-             ^ "\n[credentials.github]\napp_id = \"1\"\ninstallation_id = \"2\"\n\
+             ^ (if repo then "\n[[repo]]\nhost = \"/code/a\"\n" else "")
+             ^ if not github then "" else
+             "\n[credentials.github]\napp_id = \"1\"\ninstallation_id = \"2\"\n\
                 private_key_path = \"file:/unused\"\nrepositories = [\"owner/repo\"]\n\
                 permissions = { contents = \"read\" }\n"));
       match Declaration.load path with
@@ -463,24 +467,34 @@ let refresh_with ~state ~github =
       | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
   in
   let result = Lifecycle.refresh lifecycle declaration in
-  (result, !installs, fake)
+  (result, !installs, !syncs, fake)
 
 let refreshing_a_running_machine_installs () =
-  let result, installs, fake = refresh_with ~state:"running" ~github:true in
+  let result, installs, syncs, fake = refresh_with ~state:"running" ~github:true () in
   check_outcome "refresh" Lifecycle.Changed result;
   Alcotest.(check int) "installed once" 1 installs;
+  Alcotest.(check int) "synced once" 1 syncs;
   Alcotest.(check string) "still running" "running" fake.state
 
 let refreshing_a_stopped_machine_converges () =
-  let result, installs, fake = refresh_with ~state:"stopped" ~github:true in
+  let result, installs, syncs, fake = refresh_with ~state:"stopped" ~github:true () in
   check_outcome "refresh" Lifecycle.Converged result;
   Alcotest.(check int) "nothing installed" 0 installs;
+  Alcotest.(check int) "nothing synced" 0 syncs;
   Alcotest.(check string) "not started" "stopped" fake.state
 
 let refreshing_without_github_converges () =
-  let result, installs, _ = refresh_with ~state:"running" ~github:false in
+  let result, installs, syncs, _ = refresh_with ~state:"running" ~github:false () in
   check_outcome "refresh" Lifecycle.Converged result;
-  Alcotest.(check int) "nothing installed" 0 installs
+  Alcotest.(check int) "nothing installed" 0 installs;
+  Alcotest.(check int) "nothing synced" 0 syncs
+
+(* New host commits reach a running workbench without a GitHub App too. *)
+let refreshing_repositories_without_github_syncs () =
+  let result, installs, syncs, _ = refresh_with ~repo:true ~state:"running" ~github:false () in
+  check_outcome "refresh" Lifecycle.Changed result;
+  Alcotest.(check int) "nothing installed" 0 installs;
+  Alcotest.(check int) "synced once" 1 syncs
 
 let retargeting_a_mount_is_drift () =
   let old_home = Sys.getenv "HOME" in
@@ -547,10 +561,18 @@ let manifest_roundtrips_and_rejects_unknown_versions () =
       let decoded = Result.get_ok (Creation_manifest.decode encoded) in
       Alcotest.(check string) "roundtrip" encoded (Creation_manifest.encode decoded);
       let json = Yojson.Safe.from_string encoded in
-      let changed = match json with `Assoc fields -> `Assoc (("version", `Int 2) :: List.remove_assoc "version" fields)
+      let changed = match json with `Assoc fields -> `Assoc (("version", `Int 3) :: List.remove_assoc "version" fields)
         | _ -> Alcotest.fail "manifest is not an object" in
       Alcotest.(check bool) "unknown schema refused" true
-        (Result.is_error (Creation_manifest.decode (Yojson.Safe.to_string changed))))
+        (Result.is_error (Creation_manifest.decode (Yojson.Safe.to_string changed)));
+      (* A version 1 machine had clone mounts and no inbox: it must be recreated. *)
+      let legacy = match json with `Assoc fields -> `Assoc (("version", `Int 1) :: List.remove_assoc "version" fields)
+        | _ -> Alcotest.fail "manifest is not an object" in
+      match Creation_manifest.decode (Yojson.Safe.to_string legacy) with
+      | Ok _ -> Alcotest.fail "expected version 1 to be refused"
+      | Error reason ->
+          Alcotest.(check bool) "says how to recreate" true
+            (String.length reason > 0 && String.ends_with ~suffix:"ade rm and ade create" reason))
 
 let manifest_decoding_is_total () =
   Hegel.run_hegel_test ~database_key:"manifest-total" (fun tc ->
@@ -592,7 +614,8 @@ let () =
       ( "refresh",
         [ Alcotest.test_case "running" `Quick refreshing_a_running_machine_installs;
           Alcotest.test_case "stopped" `Quick refreshing_a_stopped_machine_converges;
-          Alcotest.test_case "no github" `Quick refreshing_without_github_converges ] );
+          Alcotest.test_case "no github" `Quick refreshing_without_github_converges;
+          Alcotest.test_case "repositories only" `Quick refreshing_repositories_without_github_syncs ] );
       ( "attach",
         [ Alcotest.test_case "starts first" `Quick attaching_to_a_stopped_machine_starts_it;
           Alcotest.test_case "herdr by default" `Quick bare_attach_opens_herdr ] );

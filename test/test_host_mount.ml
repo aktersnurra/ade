@@ -55,25 +55,44 @@ let writable_data_resolves () =
     (Filename.concat home "scratch/data" ^ ":/src/x")
     (Host_mount.volume_spec resolved)
 
-(* A clone mount is read-only, so the git directory the writable rule guards is
-   exactly what it exists to carry. It must be a git repository, because
-   ade pull has nothing to bring back from anything else. *)
-let clone_of_a_repository_resolves_read_only () =
+let repo ?(name = "a") host = { Declaration.host; name }
+
+(* A repository is never mounted, but its history goes to the guest, so it is
+   held to the same policy. It must be a git repository: a bundle needs one. *)
+let repository_resolves_to_its_canonical_path () =
   let home = fresh_home () in
   mkdir_p (Filename.concat home "code/a/.git");
-  let resolved = accepted home (mount ~mode:Declaration.Clone "~/code/a") in
-  Alcotest.(check bool) "read-only" true resolved.Host_mount.read_only
+  match Host_mount.resolve_repo (policy home) (repo "~/code/a") with
+  | Ok resolved ->
+      Alcotest.(check string) "source" (Filename.concat home "code/a") resolved.Host_mount.source;
+      Alcotest.(check string) "name" "a" resolved.Host_mount.name
+  | Error error -> Alcotest.failf "expected acceptance: %s" (Ade_error.to_string error)
 
-let clone_of_a_plain_directory_is_refused () =
+let repo_refused fragment home value =
+  match Host_mount.resolve_repo (policy home) value with
+  | Ok resolved -> Alcotest.failf "expected refusal, accepted %s" resolved.Host_mount.source
+  | Error error ->
+      let message = Ade_error.to_string error in
+      let hl = String.length message and nl = String.length fragment in
+      let rec scan i = i + nl <= hl && (String.sub message i nl = fragment || scan (i + 1)) in
+      if not (scan 0) then Alcotest.failf "expected %S in %S" fragment message
+
+let plain_directory_is_not_a_repository () =
   let home = fresh_home () in
   mkdir_p (Filename.concat home "code/plain");
-  refused "git repository" home (mount ~mode:Declaration.Clone "~/code/plain")
+  repo_refused "git repository" home (repo "~/code/plain")
 
-(* The outbox is the one writable thing a clone workbench gets, and it is
-   ADE's own directory, not a user path. *)
-let clone_workbench_gets_an_outbox () =
+(* A dotfiles repository under a protected store is still a repository. *)
+let protected_repository_is_refused () =
   let home = fresh_home () in
-  mkdir_p (Filename.concat home "code/a/.git");
+  mkdir_p (Filename.concat home ".config/dotfiles/.git");
+  repo_refused "protected" home (repo ~name:"dotfiles" "~/.config/dotfiles")
+
+(* The inbox and outbox are ADE's own directories, not user paths, and every
+   workbench has both, after its declared mounts. *)
+let every_workbench_gets_an_inbox_and_an_outbox () =
+  let home = fresh_home () in
+  mkdir_p (Filename.concat home "data");
   let declaration =
     (* Declarations live under the throwaway home, as they do for a user;
        the system temp directory would contain the home itself. *)
@@ -94,10 +113,9 @@ workspace_gib = 16
 [network]
 posture = "public"
 
-
 [[mount]]
-host = "%s/code/a"
-mode = "clone"
+host = "%s/data"
+guest = "/data"
 |}
              home));
     match Declaration.load path with
@@ -106,18 +124,22 @@ mode = "clone"
   in
   Unix.putenv "HOME" home;
   let paths = State_paths.make ~root:(Filename.concat home ".local/state/ade") () in
+  let name = Declaration.name declaration in
   match Host_mount.for_declaration ~paths declaration with
   | Error error -> Alcotest.failf "for_declaration: %s" (Ade_error.to_string error)
-  | Ok [ repo; outbox ] ->
-      Alcotest.(check string) "repo" "/src/a" repo.Host_mount.guest;
+  | Ok [ data; inbox; outbox ] ->
+      Alcotest.(check string) "declared first" "/data" data.Host_mount.guest;
+      Alcotest.(check string) "inbox guest" "/inbox" inbox.Host_mount.guest;
+      Alcotest.(check bool) "inbox read-only" true inbox.Host_mount.read_only;
+      Alcotest.(check string) "inbox source" (State_paths.inbox_dir paths name)
+        inbox.Host_mount.source;
       Alcotest.(check string) "outbox guest" "/outbox" outbox.Host_mount.guest;
       Alcotest.(check bool) "outbox writable" false outbox.Host_mount.read_only;
-      Alcotest.(check string) "outbox source"
-        (State_paths.outbox_dir paths (Declaration.name declaration))
+      Alcotest.(check string) "outbox source" (State_paths.outbox_dir paths name)
         outbox.Host_mount.source;
       Alcotest.(check bool) "resolution has no creation effects" false
         (Sys.file_exists outbox.Host_mount.source)
-  | Ok mounts -> Alcotest.failf "expected repo and outbox, got %d" (List.length mounts)
+  | Ok mounts -> Alcotest.failf "expected data, inbox and outbox, got %d" (List.length mounts)
 
 let home_is_refused () =
   let home = fresh_home () in
@@ -197,10 +219,11 @@ let resolve_all_keeps_order_and_stops_at_first_refusal () =
 let () =
   Alcotest.run "host_mount"
     [
-      ( "clone",
-        [ Alcotest.test_case "repository" `Quick clone_of_a_repository_resolves_read_only;
-          Alcotest.test_case "plain directory" `Quick clone_of_a_plain_directory_is_refused;
-          Alcotest.test_case "outbox" `Quick clone_workbench_gets_an_outbox ] );
+      ( "repositories",
+        [ Alcotest.test_case "repository" `Quick repository_resolves_to_its_canonical_path;
+          Alcotest.test_case "plain directory" `Quick plain_directory_is_not_a_repository;
+          Alcotest.test_case "protected" `Quick protected_repository_is_refused;
+          Alcotest.test_case "inbox and outbox" `Quick every_workbench_gets_an_inbox_and_an_outbox ] );
       ( "accepted",
         [ Alcotest.test_case "read-only project" `Quick read_only_project_resolves;
           Alcotest.test_case "writable data" `Quick writable_data_resolves;

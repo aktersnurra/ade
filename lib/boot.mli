@@ -25,6 +25,8 @@ type services = {
   stop_agent : Ssh_agent.t -> (unit, Ade_error.t) result;
   install_credentials :
     smolvm:Smolvm.t -> name:Workbench_name.t -> Declaration.t -> (unit, Ade_error.t) result;
+  sync_repos : smolvm:Smolvm.t -> Declaration.t -> (unit, Ade_error.t) result;
+      (** Hand the declared repositories to the running guest ({!Repo_sync}). *)
   start_proxy : Declaration.t -> (Egress_guard.binding option, Ade_error.t) result;
       (** Start the proxy and return its required host guard binding; [None]
           unless proxied. *)
@@ -38,7 +40,7 @@ type services = {
 val default_services : paths:State_paths.t -> services
 (** Real ssh-agent, a GitHub App token when the declaration has a
     [[credentials.github]] table, and an Anthropic API key when it has
-    [[credentials.anthropic]]. Installing into a running guest that already has
+    [[credentials.anthropic]], and the declared repositories as bundles. Installing into a running guest that already has
     a token adds the next generation, so the same service refreshes. *)
 
 val start :

@@ -176,6 +176,39 @@ class CliEndToEndTest(unittest.TestCase):
         again = self.ade("create", "work")
         self.assertNotEqual(again.returncode, 0)
 
+    def test_start_hands_repositories_over_as_bundles(self):
+        home = self.tmp / "home"
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"]}
+        for name in ("alpha", "beta"):
+            repo = home / "code" / name
+            repo.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "base"],
+                           check=True, env=env)
+        (self.declarations / "repos.toml").write_text(
+            'name = "repos"\nimage = "docker.io/menci/archlinuxarm:base-devel"\n\n'
+            "[resources]\ncpus = 2\nmemory_mib = 2048\noverlay_gib = 8\nworkspace_gib = 16\n\n"
+            '[network]\nposture = "sealed"\n\n'
+            '[[repo]]\nhost = "~/code/alpha"\n\n[[repo]]\nhost = "~/code/beta"\n'
+        )
+        os.environ["HOME"], saved = str(home), os.environ["HOME"]
+        try:
+            started = self.ade("start", "repos")
+        finally:
+            os.environ["HOME"] = saved
+        self.assertEqual(started.returncode, 0, msg=started.stderr)
+        workbench = self.tmp / "state" / "workbenches" / "repos"
+        create = next(call for call in self.calls() if call.startswith("machine create"))
+        # Only ADE's own directories are mounted; the repositories are not.
+        self.assertIn(f"--volume {workbench / 'inbox'}:/inbox:ro", create)
+        self.assertIn(f"--volume {workbench / 'outbox'}:/outbox", create)
+        self.assertNotIn("code/alpha", create)
+        self.assertEqual(sorted(os.listdir(workbench / "inbox")), ["alpha.bundle", "beta.bundle"])
+        # The guest script spans lines in the log; its last line ends with the name.
+        guest = [line for line in self.calls() if line.startswith('exec git clone')]
+        self.assertEqual([line.split()[-1] for line in guest], ["alpha", "beta"])
+
     def test_rm_deletes_the_machine(self):
         self.ade("create", "work")
         removed = self.ade("rm", "work", "--yes")

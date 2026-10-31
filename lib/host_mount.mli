@@ -11,7 +11,6 @@ type resolved = private {
   source : string;
   guest : string;
   read_only : bool;
-  clone_name : string option;
 }
 (** [source] is the canonical host path, with every symlink resolved, so the
     path the runtime mounts is the path that was checked. *)
@@ -29,10 +28,22 @@ val resolve : policy -> Declaration.mount -> (resolved, Ade_error.t) result
 val resolve_all :
   policy -> Declaration.mount list -> (resolved list, Ade_error.t) result
 
+type repo = private { name : string; source : string }
+(** A declared repository at its canonical host path, checked by the same
+    policy as a mount and known to contain [.git]. *)
+
+val resolve_repo : policy -> Declaration.repo -> (repo, Ade_error.t) result
+
 val for_declaration :
   paths:State_paths.t -> Declaration.t -> (resolved list, Ade_error.t) result
-(** Resolves a declaration's mounts under the default policy for this host.
-    Includes an outbox specification for clone mounts, but creates no directories. *)
+(** Resolves a declaration's mounts under the default policy for this host,
+    followed by the inbox ([/inbox], read-only) and the outbox ([/outbox],
+    writable) every workbench has. Creates no directories. *)
+
+val repos_for_declaration :
+  paths:State_paths.t -> Declaration.t -> (repo list, Ade_error.t) result
+(** Resolves a declaration's repositories under the default policy for this
+    host, in declaration order. *)
 
 val volume_spec : resolved -> string
 (** The runtime's [HOST:GUEST[:ro]] form. *)
