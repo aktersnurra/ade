@@ -65,9 +65,10 @@ val image_digest : t -> string
 (** The pinned digest, whichever form the image takes. Drift comparison and the
     declaration digest use this, so moving an image between a registry and a
     local artifact is not a change of identity. *)
-val provision : t -> string option
-(** The provisioning script's path, resolved against the directory of the
-    declaration file. Never set on a sealed workbench. *)
+val provision : t -> string list
+(** The provisioning scripts' paths, in the order they run, each resolved
+    against the directory of the declaration file. Empty when none is
+    declared, and always on a sealed workbench. *)
 
 val resources : t -> resources
 val network : t -> network

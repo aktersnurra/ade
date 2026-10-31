@@ -29,7 +29,7 @@ type t = {
   path : string;
   name : Workbench_name.t;
   image : image;
-  provision : string option;
+  provision : string list;
   resources : resources;
   network : network;
   ssh : ssh;
@@ -449,19 +449,24 @@ let parse ~path root =
   let image = parse_image (require root "image" "the declaration") in
   let resources = parse_resources (sub_table root "resources" "the declaration") in
   let network = parse_network (sub_table root "network" "the declaration") in
-  (* Relative to the declaration, so a checkout can move without editing it. *)
+  (* Relative to the declaration, so a checkout can move without editing it.
+     A list lets a workbench add its own setup after the shipped script. *)
   let provision =
-    Option.map
-      (fun value ->
-        let script = as_string "provision" value in
-        if script = "" then fail "provision must not be empty";
-        if Filename.is_relative script then Filename.concat (Filename.dirname path) script
-        else script)
-      (find root "provision")
+    let resolve script =
+      if script = "" then fail "provision must not be empty";
+      if Filename.is_relative script then Filename.concat (Filename.dirname path) script
+      else script
+    in
+    match find root "provision" with
+    | None -> []
+    | Some (Otoml.TomlArray []) -> fail "provision must name at least one script"
+    | Some (Otoml.TomlArray _ as scripts) ->
+        List.map resolve (as_string_list "provision" scripts)
+    | Some script -> [ resolve (as_string "provision" script) ]
   in
   (* Provisioning installs packages, so it needs the network; a sealed
      workbench has none, and failing at parse beats failing at create. *)
-  if provision <> None && network = Sealed then
+  if provision <> [] && network = Sealed then
     fail "provision needs a network, but this workbench is sealed";
   let herdr_enabled =
     match find root "services" with Some table -> parse_services table | None -> false
@@ -525,7 +530,7 @@ let canonical d =
   let strings values = Yojson.Safe.to_string (`List (List.map (fun value -> `String value) values)) in
   line "name" (Workbench_name.to_string d.name);
   line "image" (image_digest d);
-  line "provision" (Option.value d.provision ~default:"");
+  line "provision" (strings d.provision);
   line "cpus" (string_of_int d.resources.cpus);
   line "memory_mib" (string_of_int d.resources.memory_mib);
   line "overlay_gib" (string_of_int d.resources.overlay_gib);

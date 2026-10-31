@@ -79,16 +79,25 @@ let with_proxy_environment declaration command =
   | [] -> command
   | environment -> ("env" :: List.map (fun (key, value) -> key ^ "=" ^ value) environment) @ command
 
-(* Maintenance boots hold no identity or credentials. Always attempt shutdown;
-   if it also fails, report both causes rather than claiming rollback completed. *)
-let run_provision t declaration script =
+(* Maintenance boots hold no identity or credentials. The scripts run in
+   order in one boot, and the first failure skips the rest. Always attempt
+   shutdown; if it also fails, report both causes rather than claiming
+   rollback completed. *)
+let run_provision t declaration scripts =
   let name = Declaration.name declaration in
-  let* source = read_file script in
+  let rec read_all = function
+    | [] -> Ok []
+    | script :: rest ->
+        let* source = read_file script in
+        let* sources = read_all rest in
+        Ok ((script, source) :: sources)
+  in
+  let* sources = read_all scripts in
   let* () =
     Boot.start ~services:t.services ~smolvm:t.smolvm ~paths:t.paths
       ~purpose:Boot.Maintenance declaration
   in
-  let ran =
+  let run (script, source) =
     (* bash -s reads no profile, so a proxied guest is told its proxy here. *)
     let argv = with_proxy_environment declaration [ "bash"; "-s" ] in
     match Smolvm.exec_with_stdin t.smolvm name argv ~stdin:source with
@@ -96,6 +105,9 @@ let run_provision t declaration script =
     | Ok { Process_runner.status = 0; _ } -> Ok ()
     | Ok { Process_runner.status; stderr; _ } ->
         Error (Ade_error.Runtime_failed { argv = [ "provision"; script ]; status; stderr })
+  in
+  let ran =
+    List.fold_left (fun ran source -> Result.bind ran (fun () -> run source)) (Ok ()) sources
   in
   let stopped = halt t name in
   match ran, stopped with
@@ -109,8 +121,8 @@ let run_provision t declaration script =
 let create_and_provision t declaration =
   let* () = create_machine t declaration in
   match Declaration.provision declaration with
-  | None -> Ok ()
-  | Some script -> run_provision t declaration script
+  | [] -> Ok ()
+  | scripts -> run_provision t declaration scripts
 
 let create t declaration =
   with_lock t declaration (fun () ->
@@ -187,11 +199,11 @@ let provision t declaration =
   with_lock t declaration (fun () ->
       let name = Declaration.name declaration in
       match Declaration.provision declaration with
-      | None ->
+      | [] ->
           Error
             (Ade_error.Operation_refused
                { operation = "provision"; reason = "the declaration names no provision script" })
-      | Some script -> (
+      | scripts -> (
           let* state = observe_settled t name in
           match state with
           | Running ->
@@ -203,7 +215,7 @@ let provision t declaration =
               let* () = create_and_provision t declaration in
               Ok Changed
           | Created | Stopped ->
-              let* () = run_provision t declaration script in
+              let* () = run_provision t declaration scripts in
               Ok Changed))
 
 (* Tokens last an hour and are minted at start; this mints the next
