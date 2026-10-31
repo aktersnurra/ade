@@ -142,16 +142,17 @@ let restarting_a_stopped_machine_starts_it () =
   check_outcome "restart" Lifecycle.Changed (Lifecycle.restart lifecycle (declaration ()));
   Alcotest.(check string) "state" "running" fake.state
 
-(* A bare attach to a Herdr workbench lands in Herdr; an explicit command is
-   run as given. *)
+(* A bare attach to a Herdr workbench lands in Herdr, through a login shell:
+   Herdr lives in ~/.local/bin, which only the profile puts on PATH, and its
+   panes inherit that environment. An explicit command is run as given. *)
 let bare_attach_opens_herdr () =
   let fake, lifecycle = setup "running" in
   (match Lifecycle.attach lifecycle (declaration ()) ~command:[] with
    | Ok () -> ()
    | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
-  Alcotest.(check (list string)) "herdr" [ "--"; "herdr" ]
+  Alcotest.(check (list string)) "herdr" [ "--"; "sh"; "-lc"; "exec herdr" ]
     (match List.rev fake.last_argv with
-     | last :: dashdash :: _ -> [ dashdash; last ]
+     | script :: flag :: shell :: dashdash :: _ -> [ dashdash; shell; flag; script ]
      | _ -> []);
   (match Lifecycle.attach lifecycle (declaration ()) ~command:[ "bash" ] with
    | Ok () -> ()
@@ -343,7 +344,7 @@ let attaching_to_a_stopped_machine_starts_it () =
    | Error error -> Alcotest.failf "attach: %s" (Ade_error.to_string error));
   Alcotest.(check string) "state" "running" fake.state;
   (* work.toml enables Herdr, so the attachment is an interactive exec of it. *)
-  Alcotest.(check bool) "attached" true (List.mem "herdr" fake.last_argv)
+  Alcotest.(check bool) "attached" true (List.mem "exec herdr" fake.last_argv)
 
 (* Repeating any command must reach the same end state. *)
 let commands_are_idempotent () =
