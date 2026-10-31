@@ -190,6 +190,25 @@ let classifier_parses_answers () =
   Alcotest.(check string) "reason is the confidence" "confidence 0.73"
     (snd (Egress_classifier.parse_response (reply ~confidence:0.734 "deny")))
 
+(* An allow is taken only when the model is sure of it; a hesitant one goes to
+   the user, as when in doubt. *)
+let classifier_hesitant_allow_asks () =
+  let parse body = Egress_classifier.parse_response body in
+  Alcotest.(check bool) "sure" true
+    (fst (parse (reply ~confidence:0.96 "allow")) = Egress.Allow);
+  Alcotest.(check bool) "at the floor" true
+    (fst (parse (reply ~confidence:Egress_classifier.minimum_allow_confidence "allow"))
+     = Egress.Allow);
+  let verdict, reason = parse (reply ~confidence:0.25 "allow") in
+  Alcotest.(check bool) "hesitant" true (verdict = Egress.Ask);
+  Alcotest.(check string) "says why" "allow at confidence 0.25, below 0.80" reason;
+  let no_confidence =
+    {|{"answers":{"verdict":{"type":"choice","choice":"allow"}}}|}
+  in
+  Alcotest.(check bool) "no confidence" true (fst (parse no_confidence) = Egress.Ask);
+  Alcotest.(check bool) "a hesitant ask is still ask" true
+    (fst (parse (reply ~confidence:0.25 "ask")) = Egress.Ask)
+
 let classifier_failures_are_unavailable () =
   let config = { classifier_config with api_key = Secret.file ~path:"/dev/null" } in
   let classify post =
@@ -225,4 +244,5 @@ let () =
       ( "classifier",
         [ Alcotest.test_case "body" `Quick classifier_body_carries_no_key;
           Alcotest.test_case "answers" `Quick classifier_parses_answers;
+          Alcotest.test_case "hesitant allow" `Quick classifier_hesitant_allow_asks;
           Alcotest.test_case "failures" `Quick classifier_failures_are_unavailable ] ) ]
