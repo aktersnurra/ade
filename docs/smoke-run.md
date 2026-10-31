@@ -96,7 +96,7 @@ enforcement. In particular:
    without changing `net/guard.json` or rebooting the VM. Do not print that
    file: it contains the host authentication token.
 4. `ade restart smoke-proxy` must rotate the binding. Stop must close both
-   the proxy and guard listeners.
+   the proxy and guard listeners and remove `net/guard.json`.
 
 If the selected address is unreachable, choose another host-assigned address
 and recreate the machine, noting which one worked. If another proxy or host
