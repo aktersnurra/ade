@@ -283,6 +283,19 @@ let openssl_signer ~runner ~openssl ~reader config input =
   let signature = ref None in
   let outcome =
     try Secret.with_value ~reader config.private_key ~f:(fun key_bytes ->
+        (* A client secret or a path stored where the key belongs would only
+           get openssl's "could not find private key" about a temporary file.
+           The reference is named, never the value. *)
+        let pem = String.trim key_bytes in
+        if not (String.starts_with ~prefix:"-----BEGIN " pem
+                && String.ends_with ~suffix:"PRIVATE KEY-----" pem) then
+          Error
+            (Ade_error.Operation_refused
+               { operation = "sign JWT";
+                 reason =
+                   Secret.describe config.private_key
+                   ^ " does not hold a PEM private key; store the App's .pem file there" })
+        else
         let key_file, channel = Filename.open_temp_file ~perms:0o600 "ade-jwt-" ".pem" in
         Fun.protect ~finally:(fun () -> close_out_noerr channel; Sys.remove key_file) (fun () ->
         output_string channel key_bytes;

@@ -2,7 +2,8 @@ open Ade
 
 let now = 1_756_500_000.0
 let minted_token = "FAKE" ^ "-minted-installation-token"
-let key_material = "FAKE" ^ "-app-private-key"
+let key_material =
+  "-----BEGIN " ^ "PRIVATE KEY-----\nFAKE" ^ "-app-private-key\n-----END " ^ "PRIVATE KEY-----\n"
 let signature = "FAKE" ^ "-rsa-signature"
 
 let key_path () =
