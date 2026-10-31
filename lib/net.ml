@@ -159,15 +159,23 @@ let wait_until ~seconds condition =
 
 let stop ~paths name =
   (try Sys.remove (State_paths.mediated_file paths name) with Sys_error _ -> ());
-  match running_pid ~paths name with
-  | None -> Ok ()
-  | Some pid ->
-      (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
-      if wait_until ~seconds:3.0 (fun () -> running_pid ~paths name = None) then Ok ()
-      else (
-        (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
-        if wait_until ~seconds:2.0 (fun () -> running_pid ~paths name = None) then Ok ()
-        else Error (refused "stop proxy" (Printf.sprintf "the proxy (pid %d) did not exit" pid)))
+  let* () =
+    match running_pid ~paths name with
+    | None -> Ok ()
+    | Some pid ->
+        (try Unix.kill pid Sys.sigterm with Unix.Unix_error _ -> ());
+        if wait_until ~seconds:3.0 (fun () -> running_pid ~paths name = None) then Ok ()
+        else (
+          (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+          if wait_until ~seconds:2.0 (fun () -> running_pid ~paths name = None) then Ok ()
+          else Error (refused "stop proxy" (Printf.sprintf "the proxy (pid %d) did not exit" pid)))
+  in
+  (* The guard file holds the interceptor token, and nothing reads it once the
+     proxy is gone, so it does not outlive the run. A failed deletion is an
+     error: the next boot must get a fresh capability, never reuse this one. *)
+  try Unix.unlink (State_paths.guard_file paths name); Ok () with
+  | Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
+  | Unix.Unix_error (error, _, _) -> Error (refused "stop proxy" (Unix.error_message error))
 
 let tail path =
   match In_channel.with_open_bin path In_channel.input_all with
@@ -227,13 +235,8 @@ let start ~paths declaration =
     (fun path -> try Sys.remove path with Sys_error _ -> ())
     [ State_paths.session_allow_file paths name; State_paths.auto_allow_file paths name;
       State_paths.revoked_file paths name ];
-  (* A fresh boot must get a fresh capability, never silently reuse one after
-     a failed deletion. Recovery through [ensure] deliberately preserves it. *)
-  let* () =
-    try Unix.unlink (State_paths.guard_file paths name); Ok () with
-    | Unix.Unix_error (Unix.ENOENT, _, _) -> Ok ()
-    | Unix.Unix_error (error, _, _) -> Error (refused "start proxy" (Unix.error_message error))
-  in
+  (* [stop] removed the old guard file, so the proxy mints a fresh capability.
+     Recovery through [ensure] deliberately preserves it. *)
   let* () = launch ~paths declaration in
   match proxy_of declaration with
   | None -> Ok None
