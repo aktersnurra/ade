@@ -6,6 +6,8 @@ let now = 1_756_500_000.0
    real credential. *)
 let fake_token = "FAKE" ^ "-installation-token"
 
+let fake_pem = "-----BEGIN " ^ "PRIVATE KEY-----\nfixture\n-----END " ^ "PRIVATE KEY-----\n"
+
 let key_path () =
   (* Configuration parsing keeps the locator; it never resolves the key. *)
   let path = Filename.temp_file "ade-app-key-" ".pem" in
@@ -291,11 +293,28 @@ let signing_io_failure_removes_temporary_key () =
   Fun.protect ~finally:(fun () -> Option.iter (fun path ->
       try Sys.remove path with Sys_error _ -> ()) !key_file) (fun () ->
       let result = Github_credential.openssl_signer ~runner ~openssl:"unused"
-          ~reader:(fun _ -> Ok "fake-private-key") (config ()) "input" in
+          ~reader:(fun _ -> Ok fake_pem) (config ()) "input" in
       Alcotest.(check bool) "structured failure" true (Result.is_error result);
       match !key_file with
       | None -> Alcotest.fail "signer not reached"
       | Some path -> Alcotest.(check bool) "key removed" false (Sys.file_exists path))
+
+(* A client secret or a path stored where the key belongs is refused before
+   openssl sees it, by naming the reference, never by echoing the value. *)
+let a_key_that_is_not_pem_is_refused_by_reference () =
+  let reached = ref false in
+  let runner _ = reached := true; Ok { Process_runner.status = 0; stdout = "sig"; stderr = "" } in
+  let value = "0123456789abcdef0123456789abcdef01234567" in
+  let config = config () in
+  match Github_credential.openssl_signer ~runner ~openssl:"unused"
+          ~reader:(fun _ -> Ok (value ^ "\n")) config "input" with
+  | Ok _ -> Alcotest.fail "expected a refusal"
+  | Error reason ->
+      Alcotest.(check bool) "openssl not run" false !reached;
+      Alcotest.(check bool) "says PEM" true (contains reason "PEM private key");
+      Alcotest.(check bool) "names the reference" true
+        (contains reason (Secret.describe (Github_credential.private_key config)));
+      Alcotest.(check bool) "never echoes the value" false (contains reason value)
 
 let () =
   Alcotest.run "github_credential"
@@ -357,6 +376,7 @@ let () =
             base64url_never_emits_padding_or_unsafe_characters ] );
       ( "signing",
         [ Alcotest.test_case "I/O cleanup" `Quick signing_io_failure_removes_temporary_key;
+          Alcotest.test_case "not PEM" `Quick a_key_that_is_not_pem_is_refused_by_reference;
           Alcotest.test_case "input" `Quick the_signing_input_has_two_dot_separated_segments;
           Alcotest.test_case "three segments" `Quick a_signed_jwt_has_three_segments;
           Alcotest.test_case "failure" `Quick a_signing_failure_is_reported ] )
