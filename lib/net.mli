@@ -61,7 +61,7 @@ val ensure : paths:State_paths.t -> Declaration.t -> (unit, Ade_error.t) result
     for a running machine whose proxy died. *)
 
 val stop : paths:State_paths.t -> Workbench_name.t -> (unit, Ade_error.t) result
-(** Stop the proxy if it runs. *)
+(** Stop the proxy if it runs, and remove its guard token. *)
 
 val serve : paths:State_paths.t -> declaration_path:string -> (unit, Ade_error.t) result
 (** Run the proxy in this process until it is killed. [ade net serve] is the

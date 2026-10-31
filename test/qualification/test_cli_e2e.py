@@ -259,10 +259,14 @@ class CliEndToEndTest(unittest.TestCase):
         refused = self.request(port, "CONNECT other.example:443 HTTP/1.1\r\n\r\n")
         self.assertTrue(refused.startswith("HTTP/1.1 403"), refused)
 
+        guard_file = pid_file.parent / "guard.json"
+        self.assertTrue(guard_file.exists())
         stopped = self.ade("stop", "work-proxied")
         self.assertEqual(stopped.returncode, 0, msg=stopped.stderr)
         with self.assertRaises(OSError):
             self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
+        # The guard file holds the interceptor token; it must not outlive the run.
+        self.assertFalse(guard_file.exists())
 
     def test_proxied_start_requires_an_authenticated_endpoint_guard(self):
         port = self.proxied_declaration()
@@ -346,13 +350,11 @@ class CliEndToEndTest(unittest.TestCase):
         self.assertEqual(self.machines().get("work-proxied"), "created")
         net = self.tmp / "state" / "workbenches" / "work-proxied" / "net"
         self.assertFalse((net / "mediated").exists())
-        binding = json.loads((net / "guard.json").read_text())
+        # The guard listens in the proxy process, so a closed proxy port means
+        # both are gone; the rollback also removed the guard's token.
         with self.assertRaises(OSError):
             self.request(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n")
-        with self.assertRaises(OSError), socket.create_connection(
-            ("127.0.0.1", int(binding["address"].rsplit(":", 1)[1])), timeout=1
-        ):
-            pass
+        self.assertFalse((net / "guard.json").exists())
 
     def test_running_proxied_machine_without_guard_is_not_adopted(self):
         self.proxied_declaration()
