@@ -24,6 +24,15 @@ cat > /etc/profile.d/ade-path.sh <<'EOF'
 export PATH="$HOME/.local/bin:$PATH"
 EOF
 
+# Claude Code's telemetry, error reporting and auto-updater are not needed to
+# work, and a log-intake host is a route out the egress proxy would otherwise
+# have to judge. Herdr panes get it from bash.bashrc.
+cat > /etc/profile.d/ade-claude.sh <<'EOF'
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+EOF
+grep -qxF '. /etc/profile.d/ade-claude.sh' /etc/bash.bashrc 2>/dev/null \
+  || echo '. /etc/profile.d/ade-claude.sh' >> /etc/bash.bashrc
+
 # Clone mounts under /src belong to the host user, not to guest root, so git
 # refuses to clone them as "dubious ownership". They are the user's own
 # repositories, mounted read-only.
