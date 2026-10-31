@@ -11,7 +11,8 @@ let name =
 let target host = { Egress.host; port = 443 }
 
 (* A decider over a scripted classifier, counting how often it is asked. *)
-let setup ?(answer = fun _ -> (Egress.Allow, "a package registry")) ?(classifier = true) () =
+let setup ?(answer = fun _ -> (Egress.Allow, "a package registry")) ?(classifier = true)
+    ?(notify = fun _ -> ()) () =
   let paths = State_paths.make ~root:(temp_root ()) () in
   let calls = ref 0 and events = ref [] in
   let classify ~target ~allowed:_ ~recent:_ =
@@ -23,6 +24,7 @@ let setup ?(answer = fun _ -> (Egress.Allow, "a package registry")) ?(classifier
       ~record:(fun event -> events := event :: !events)
       ~allowed:(fun () -> [ "github.com" ])
       ~classify:(if classifier then Some classify else None)
+      ~notify
   in
   (paths, decide, calls, events)
 
@@ -69,6 +71,31 @@ let without_a_classifier_everything_asks () =
   match decide (target "registry.yarnpkg.com") with
   | Egress_proxy.Refuse None -> ()
   | _ -> Alcotest.fail "expected a plain refusal"
+
+(* The user hears about a host that needs them once per run, and never about
+   one the classifier settled. *)
+let hosts_that_need_the_user_notify_once () =
+  let notified = ref [] in
+  let notify (t : Egress.target) = notified := t.host :: !notified in
+  let _, decide, _, _ =
+    setup ~notify
+      ~answer:(fun (t : Egress.target) ->
+        match t.host with
+        | "bad.example" -> (Egress.Deny, "a request-capture service")
+        | "registry.yarnpkg.com" -> (Egress.Allow, "a package registry")
+        | "down.example" -> (Egress.Unavailable, "classifier unreachable")
+        | _ -> (Egress.Ask, "not recognised"))
+      ()
+  in
+  List.iter (fun host -> ignore (decide (target host)))
+    [ "unknown.example"; "unknown.example"; "bad.example"; "registry.yarnpkg.com";
+      "down.example"; "1.2.3.4" ];
+  Alcotest.(check (list string)) "notified" [ "unknown.example"; "down.example"; "1.2.3.4" ]
+    (List.rev !notified);
+  let notified = ref 0 in
+  let _, decide, _, _ = setup ~classifier:false ~notify:(fun _ -> incr notified) () in
+  ignore (decide (target "registry.yarnpkg.com"));
+  Alcotest.(check int) "without a classifier too" 1 !notified
 
 let declaration () =
   let path = Filename.temp_file "ade-net-" ".toml" in
@@ -136,5 +163,6 @@ let () =
           Alcotest.test_case "deny and ask" `Quick deny_and_ask_refuse;
           Alcotest.test_case "unusual names" `Quick unusual_names_never_reach_the_model;
           Alcotest.test_case "no classifier" `Quick without_a_classifier_everything_asks;
+          Alcotest.test_case "notify" `Quick hosts_that_need_the_user_notify_once;
           Alcotest.test_case "revoke" `Quick revoke_takes_back_an_auto_allow;
           Alcotest.test_case "concurrent" `Quick concurrent_requests_ask_once ] ) ]

@@ -285,7 +285,7 @@ let classifier_of ~workbench = function
    answer is kept, so retries cost nothing. An allow is written to the
    auto-allowed list as the exact host and port, and from then on matches as a
    pattern. A revoked host is refused before anything else is asked. *)
-let decider ~paths ~name ~record ~allowed ~(classify : classify option) =
+let decider ~paths ~name ~record ~allowed ~(classify : classify option) ~notify =
   let lock = Mutex.create () in
   let decided : (Egress.target, Egress.verdict * string) Hashtbl.t = Hashtbl.create 16 in
   let in_flight = Hashtbl.create 16 in
@@ -331,6 +331,9 @@ let decider ~paths ~name ~record ~allowed ~(classify : classify option) =
             try verdict_for target with exn -> (Egress.Unavailable, Printexc.to_string exn)
           in
           classified target verdict reason;
+          (match verdict with
+           | Egress.Ask | Egress.Unavailable -> notify target
+           | Egress.Allow | Egress.Deny -> ());
           Mutex.protect lock (fun () ->
               Hashtbl.replace decided target (verdict, reason);
               Hashtbl.remove in_flight target);
@@ -346,6 +349,54 @@ let decider ~paths ~name ~record ~allowed ~(classify : classify option) =
       | Egress.Ask | Egress.Unavailable ->
           Egress_proxy.Refuse
             (if reason = "" then None else Some (because "it needs the user's approval"))
+
+(* A refused host that needs the user is announced on the host desktop, so
+   an ask does not sit unseen in [ade net pending]. The host name comes from
+   the agent, so it is sanitized and passed as an argument, never through a
+   shell or into a script. A missing or failing notifier changes nothing:
+   the request is refused either way. *)
+let desktop_notifier ~workbench =
+  let notifier =
+    match Process_runner.find_executable "notify-send" with
+    | Some notify_send ->
+        Some (fun body -> (notify_send, [ "--app-name=ade"; "ade: " ^ workbench ^ " is blocked"; body ]))
+    | None -> (
+        match Process_runner.find_executable "osascript" with
+        | Some osascript ->
+            Some (fun body ->
+                ( osascript,
+                  [ "-e"; "on run argv"; "-e";
+                    "display notification (item 2 of argv) with title (item 1 of argv)"; "-e";
+                    "end run"; "ade: " ^ workbench ^ " is blocked"; body ] ))
+        | None -> None)
+  in
+  fun (target : Egress.target) ->
+    match notifier with
+    | None -> ()
+    | Some command ->
+        let body =
+          Printf.sprintf "%s needs your approval: ade net allow %s %s"
+            (Egress.sanitize (Egress.render_target target)) workbench
+            (Egress.sanitize (Egress.render_allow_argument target))
+        in
+        let executable, argv = command body in
+        (* Only what reaches the desktop session; the proxy inherited these
+           from the command that started it. *)
+        let env =
+          List.filter_map
+            (fun key -> Option.map (fun value -> (key, value)) (Sys.getenv_opt key))
+            [ "PATH"; "HOME"; "DBUS_SESSION_BUS_ADDRESS"; "XDG_RUNTIME_DIR"; "DISPLAY";
+              "WAYLAND_DISPLAY" ]
+        in
+        (* The agent's request does not wait on the desktop. *)
+        ignore
+          (Thread.create
+             (fun () ->
+               ignore
+                 (Process_runner.run
+                    { Process_runner.executable; argv; env; stdin = None;
+                      stdio = Process_runner.Capture }))
+             ())
 
 let serve ~paths ~declaration_path =
   let* declaration = Declaration.load declaration_path in
@@ -383,6 +434,7 @@ let serve ~paths ~declaration_path =
         decider ~paths ~name ~record
           ~allowed:(fun () -> allowed_hosts ~paths (current ()))
           ~classify:(classifier_of ~workbench:(Workbench_name.to_string name) classifier)
+          ~notify:(desktop_notifier ~workbench:(Workbench_name.to_string name))
       in
       let config =
         {
