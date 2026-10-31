@@ -287,8 +287,9 @@ is sent. Operation-level limits come from the credentials' own scopes.
 
 ### Classifier
 
-With a classifier, a host no pattern allows is put to a model on OpenRouter,
-which answers allow, ask or deny:
+With a classifier, a host no pattern allows is put to a decision model on
+OpenRouter's Decisions API (`/api/alpha/decisions`), which picks allow, ask or
+deny. Chat models are not supported:
 
 ```toml
 [network.classifier]
@@ -303,8 +304,10 @@ api_key_ref = "pass:ade/openrouter"
 - **ask**: refused with the "ade net allow" message. Hosts the model does not
   recognise, paste and file-sharing services, and a model that is down, slow
   (more than 10 seconds) or answers nonsense all land here.
-- **deny**: refused with the model's reason, and listed in `ade net pending`
-  in case it is wrong.
+- **deny**: refused, and listed in `ade net pending` in case it is wrong.
+
+Decision models give no explanation; the log and `ade net pending` show the
+model's confidence instead.
 
 The request waits for the answer, once per host per run; later requests for
 the same host reuse it. `ade net log` shows every automatic allow
@@ -367,13 +370,20 @@ pending`, then allowed by `ade net allow`. Bypassing the proxy, raw IPs and ever
 other port on the proxy's host address are refused. With the proxy daemon
 killed the guest has no network, and `ade start` brings the proxy back without
 rebooting the VM. `restart` rotates the guard binding and drops session allows;
-`stop` closes the proxy. Not yet run for real:
+`stop` closes the proxy.
 
-- `[ssh] mode = "dedicated_agent"`, `pass:` secrets and `[credentials.github]`.
-  The GitHub token check assumes the response carries `repository_selection`
-  and `repositories`; confirm on the first real run.
+The classifier has run for real with `typesafe/jev-1.14`: `pypi.org` and
+`files.pythonhosted.org` were allowed automatically, `pastebin.com` was put to
+the user, and a data-shaped name was denied, each in about a second. A
+dedicated SSH agent with a `pass:` key has run too: the guest sees only that
+key, provisioning gets an empty agent, and `stop` ends the agent.
+
+Not yet run for real:
+
+- `[credentials.github]`. The GitHub token check assumes the response carries
+  `repository_selection` and `repositories`; confirm on the first real run.
+- Git over SSH with the dedicated agent: the guest sees exactly the one key
+  and reaches github.com:22, but no key has been registered with GitHub yet.
 - macOS arm64.
-- The egress proxy without `[network.classifier]`; the classifier has only
-  been called with a bogus key.
 - The proxy log (`net/log` in the workbench's state) records every
   connection and is never rotated.
