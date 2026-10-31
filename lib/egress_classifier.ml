@@ -48,6 +48,11 @@ let request_body config ~workbench ~target ~allowed ~recent =
                     ("instructions", `String instructions);
                     ("criteria", `Assoc (List.map (fun (option, guide) -> (option, `String guide)) criteria)) ] ) ] ) ])
 
+(* An allow lasts the session and is the only verdict that lets data out, so
+   a hesitant one is put to the user. Measured on typesafe/jev-1.14, package
+   hosts come back above 0.9, while a log-intake host was allowed at 0.25. *)
+let minimum_allow_confidence = 0.8
+
 (* Decision models give no explanation, so the confidence is the reason shown
    next to a verdict. Anything that is not one of the three choices is
    Unavailable: the request stays refused either way. *)
@@ -64,13 +69,23 @@ let parse_response body =
           | Some message -> unavailable ("classifier error: " ^ message)
           | None | (exception Type_error _) -> unavailable "the classifier sent no answer")
       | Some choice -> (
+          let confidence =
+            try member "confidence" answer |> to_number_option with Type_error _ -> None
+          in
           let reason =
-            match member "confidence" answer |> to_number_option with
+            match confidence with
             | Some confidence -> Printf.sprintf "confidence %.2f" confidence
-            | None | (exception Type_error _) -> ""
+            | None -> ""
           in
           match choice with
-          | "allow" -> (Egress.Allow, reason)
+          | "allow" -> (
+              match confidence with
+              | Some confidence when confidence >= minimum_allow_confidence -> (Egress.Allow, reason)
+              | Some confidence ->
+                  ( Egress.Ask,
+                    Printf.sprintf "allow at confidence %.2f, below %.2f" confidence
+                      minimum_allow_confidence )
+              | None -> (Egress.Ask, "allow without a confidence"))
           | "ask" -> (Egress.Ask, reason)
           | "deny" -> (Egress.Deny, reason)
           | _ -> unavailable "the classifier gave no verdict"))

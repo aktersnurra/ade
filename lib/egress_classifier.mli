@@ -2,7 +2,8 @@
     no pattern allows.
 
     [Allow] lets the request through and allows the exact host and port for the
-    rest of the session; [Ask] and [Unavailable] refuse it until the user
+    rest of the session, when the model is at least
+    {!minimum_allow_confidence} sure of it; [Ask] and [Unavailable] refuse it until the user
     allows it on the host; [Deny] refuses it with the model's reason. Names of
     an {!Egress.unusual_shape} never reach the model.
 
@@ -16,6 +17,9 @@ type config = { model : string; api_key : Secret.t }
 val endpoint : string
 
 val timeout_seconds : int
+
+val minimum_allow_confidence : float
+(** An allow below this confidence, or without one, is [Ask]. *)
 
 val request_body :
   config ->

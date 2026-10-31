@@ -327,7 +327,8 @@ api_key_ref = "pass:ade/openrouter"
 - **allow**: the request goes through, and that exact `host:port` stays
   allowed until the workbench next starts. Registries, source hosts,
   toolchains, mirrors and documentation sites should land here, so most new
-  hosts cost you nothing.
+  hosts cost you nothing. An allow with a confidence below 0.80 is treated as
+  ask: `typesafe/jev-1.14` allowed a log-intake host at 0.25.
 - **ask**: refused with the "ade net allow" message. Hosts the model does not
   recognise, paste and file-sharing services, and a model that is down, slow
   (more than 10 seconds) or answers nonsense all land here.
