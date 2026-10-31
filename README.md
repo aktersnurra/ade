@@ -32,8 +32,14 @@ ADE itself needs OCaml 5.4 or later:
 
 ```sh
 opam install . --deps-only --with-test
-dune build
+dune build --release
+install -m 755 _build/default/bin/main.exe ~/.local/bin/ade
 ```
+
+Install a copy, not a symlink into `_build`: the proxy re-executes ADE's own
+binary, so a link would hand every rebuild to running workbenches. Re-run the
+`install` line after updating; a workbench's proxy keeps the old binary until
+the workbench next starts.
 
 Declarations are read from `~/.config/ade/workbenches/NAME.toml`
 (`$XDG_CONFIG_HOME/ade/workbenches` when that is set; `ADE_WORKBENCHES_DIR`
