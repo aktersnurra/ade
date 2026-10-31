@@ -1,4 +1,5 @@
-(** A model behind OpenRouter that decides destinations no pattern allows.
+(** A decision model behind OpenRouter's Decisions API that decides destinations
+    no pattern allows.
 
     [Allow] lets the request through and allows the exact host and port for the
     rest of the session; [Ask] and [Unavailable] refuse it until the user

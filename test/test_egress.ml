@@ -156,28 +156,39 @@ let classifier_body_carries_no_key () =
   let json = Yojson.Safe.from_string body in
   let open Yojson.Safe.Util in
   Alcotest.(check string) "model" "typesafe/jev-1.14" (to_string (member "model" json));
-  let user = member "messages" json |> index 1 |> member "content" |> to_string in
-  let facts = Yojson.Safe.from_string user in
-  Alcotest.(check string) "requested" "registry.yarnpkg.com:443" (to_string (member "requested" facts))
+  Alcotest.(check string) "requested" "registry.yarnpkg.com:443"
+    (member "state" json |> member "requested" |> to_string);
+  let question = member "questions" json |> member "verdict" in
+  Alcotest.(check string) "a choice" "choice" (to_string (member "type" question));
+  Alcotest.(check (list string)) "options" [ "allow"; "ask"; "deny" ]
+    (keys (member "criteria" question))
 
-let reply content =
+let reply ?(confidence = 0.9) choice =
   Yojson.Safe.to_string
-    (`Assoc [ ("choices", `List [ `Assoc [ ("message", `Assoc [ ("content", `String content) ]) ] ]) ])
+    (`Assoc
+      [ ("model", `String "typesafe/jev-1.14");
+        ( "answers",
+          `Assoc
+            [ ( "verdict",
+                `Assoc
+                  [ ("type", `String "choice"); ("choice", `String choice);
+                    ("confidence", `Float confidence) ] ) ] );
+        ("usage", `Assoc [ ("input_tokens", `Int 1); ("output_tokens", `Int 1) ]) ])
 
 let classifier_parses_answers () =
   let verdict body = fst (Egress_classifier.parse_response body) in
-  Alcotest.(check bool) "allow" true
-    (verdict (reply {|{"verdict":"allow","reason":"Yarn registry"}|}) = Egress.Allow);
-  Alcotest.(check bool) "ask" true (verdict (reply {|{"verdict":"ask","reason":"?"}|}) = Egress.Ask);
-  Alcotest.(check bool) "fenced deny" true
-    (verdict (reply "```json\n{\"verdict\":\"deny\",\"reason\":\"x\"}\n```") = Egress.Deny);
-  Alcotest.(check bool) "unknown verdict" true
-    (verdict (reply {|{"verdict":"yes"}|}) = Egress.Unavailable);
-  Alcotest.(check bool) "prose" true (verdict (reply "sure, looks fine") = Egress.Unavailable);
+  Alcotest.(check bool) "allow" true (verdict (reply "allow") = Egress.Allow);
+  Alcotest.(check bool) "ask" true (verdict (reply "ask") = Egress.Ask);
+  Alcotest.(check bool) "deny" true (verdict (reply "deny") = Egress.Deny);
+  Alcotest.(check bool) "unknown choice" true (verdict (reply "yes") = Egress.Unavailable);
+  Alcotest.(check bool) "no answers" true (verdict {|{"model":"m"}|} = Egress.Unavailable);
+  Alcotest.(check bool) "not json" true (verdict "sure, looks fine" = Egress.Unavailable);
   Alcotest.(check bool) "error" true
-    (verdict {|{"error":{"message":"no such model"}}|} = Egress.Unavailable);
-  Alcotest.(check string) "reason sanitized" "a [31m b"
-    (snd (Egress_classifier.parse_response (reply "{\"verdict\":\"allow\",\"reason\":\"a\u{1b}[31m b\"}")))
+    (verdict {|{"error":{"code":400,"message":"no such model"}}|} = Egress.Unavailable);
+  Alcotest.(check string) "error reason" "classifier error: no such model"
+    (snd (Egress_classifier.parse_response {|{"error":{"code":400,"message":"no such model"}}|}));
+  Alcotest.(check string) "reason is the confidence" "confidence 0.73"
+    (snd (Egress_classifier.parse_response (reply ~confidence:0.734 "deny")))
 
 let classifier_failures_are_unavailable () =
   let config = { classifier_config with api_key = Secret.file ~path:"/dev/null" } in
@@ -190,7 +201,7 @@ let classifier_failures_are_unavailable () =
   Alcotest.(check bool) "status" true
     (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (500, "")) = Egress.Unavailable);
   Alcotest.(check bool) "ok" true
-    (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (200, reply {|{"verdict":"allow","reason":"r"}|}))
+    (classify (fun ~url:_ ~bearer:_ ~body:_ -> Ok (200, reply "allow"))
      = Egress.Allow)
 
 let () =
