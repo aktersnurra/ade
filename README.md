@@ -376,14 +376,13 @@ The classifier has run for real with `typesafe/jev-1.14`: `pypi.org` and
 `files.pythonhosted.org` were allowed automatically, `pastebin.com` was put to
 the user, and a data-shaped name was denied, each in about a second. A
 dedicated SSH agent with a `pass:` key has run too: the guest sees only that
-key, provisioning gets an empty agent, and `stop` ends the agent.
+key, provisioning gets an empty agent, a clone and push over SSH to a repo
+holding that key as a deploy key works, and `stop` ends the agent.
 
 Not yet run for real:
 
 - `[credentials.github]`. The GitHub token check assumes the response carries
   `repository_selection` and `repositories`; confirm on the first real run.
-- Git over SSH with the dedicated agent: the guest sees exactly the one key
-  and reaches github.com:22, but no key has been registered with GitHub yet.
 - macOS arm64.
 - The proxy log (`net/log` in the workbench's state) records every
   connection and is never rotated.
