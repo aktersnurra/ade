@@ -254,10 +254,12 @@ let attach t declaration ~command =
      other operation on the workbench. *)
   let* _ = with_lock t declaration (fun () -> ensure_running t declaration) in
   (* With Herdr enabled, a bare attach lands in Herdr, which connects to the
-     guest's server or spawns it. Agents are started by the user from there. *)
+     guest's server or spawns it. Agents are started by the user from there.
+     It runs from a login shell: Herdr and the agents live in ~/.local/bin,
+     which only the profile puts on PATH, and the panes inherit it. *)
   let command =
     match command with
-    | [] when Declaration.herdr_enabled declaration -> [ "herdr" ]
+    | [] when Declaration.herdr_enabled declaration -> [ "sh"; "-lc"; "exec herdr" ]
     | command -> command
   in
   Smolvm.attach t.smolvm (Declaration.name declaration) ~command
