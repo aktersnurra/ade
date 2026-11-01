@@ -119,6 +119,36 @@ hosts = ["github.com"]
   | Ok declaration -> declaration
   | Error error -> Alcotest.failf "declaration: %s" (Ade_error.to_string error)
 
+(* The log is bounded: at the limit it moves aside to one previous file, and
+   net log reads both, oldest first, so the newest events are never lost. *)
+let the_log_rotates_into_one_previous_file () =
+  let paths = State_paths.make ~root:(temp_root ()) () in
+  let declaration = declaration () in
+  let workbench = Declaration.name declaration in
+  let record = Net.recorder ~max_bytes:300 ~paths workbench in
+  for i = 1 to 40 do
+    record (Egress.Decision { time = float_of_int i; target = target "a.com"; allowed = true })
+  done;
+  let size path = (Unix.stat path).Unix.st_size in
+  let current = State_paths.net_log paths workbench in
+  let previous = State_paths.net_log_previous paths workbench in
+  let line =
+    String.length
+      (Egress.event_to_line (Egress.Decision { time = 40.; target = target "a.com"; allowed = true }))
+  in
+  (* It moves aside before the append that would follow the limit. *)
+  Alcotest.(check bool) "current stays within a line of the limit" true (size current < 300 + line);
+  Alcotest.(check bool) "previous holds a full log" true (size previous >= 300);
+  match Net.log ~paths declaration with
+  | Error error -> Alcotest.failf "log: %s" (Ade_error.to_string error)
+  | Ok events ->
+      let times =
+        List.map (function Egress.Decision { time; _ } | Egress.Classified { time; _ } -> time) events
+      in
+      Alcotest.(check bool) "older events dropped" true (List.length times < 40);
+      Alcotest.(check (float 0.)) "newest kept" 40. (List.nth times (List.length times - 1));
+      Alcotest.(check bool) "oldest first" true (List.sort compare times = times)
+
 let revoke_takes_back_an_auto_allow () =
   let paths, decide, calls, _ = setup () in
   let declaration = declaration () in
@@ -165,4 +195,5 @@ let () =
           Alcotest.test_case "no classifier" `Quick without_a_classifier_everything_asks;
           Alcotest.test_case "notify" `Quick hosts_that_need_the_user_notify_once;
           Alcotest.test_case "revoke" `Quick revoke_takes_back_an_auto_allow;
+          Alcotest.test_case "log rotation" `Quick the_log_rotates_into_one_previous_file;
           Alcotest.test_case "concurrent" `Quick concurrent_requests_ask_once ] ) ]

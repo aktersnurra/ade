@@ -114,12 +114,13 @@ let revoke ~paths declaration ~host =
         (patterns (persistent_hosts declaration)))
 
 let events ~paths declaration =
-  match
-    In_channel.with_open_bin (State_paths.net_log paths (Declaration.name declaration))
-      In_channel.input_all
-  with
-  | exception Sys_error _ -> []
-  | text -> Egress.events_of_text text
+  let name = Declaration.name declaration in
+  let read path =
+    try In_channel.with_open_bin path In_channel.input_all with Sys_error _ -> ""
+  in
+  (* Each file ends with a whole line, so the two join without tearing one. *)
+  Egress.events_of_text
+    (read (State_paths.net_log_previous paths name) ^ read (State_paths.net_log paths name))
 
 let pending ~paths declaration =
   let* _ = require_proxied "net pending" declaration in
@@ -258,11 +259,20 @@ let ensure ~paths declaration =
             (Egress_guard.load (State_paths.guard_file paths name)) in
         if running_pid ~paths name <> None then Ok () else launch ~paths declaration
 
-let recorder ~paths name =
+(* Every request appends a line, so a long-running workbench would grow its log
+   without bound. At the limit it moves aside, replacing the previous one, and
+   readers take both: at most about twice the limit is kept. The proxy is the
+   only writer, so the rename races nothing but a reader. *)
+let recorder ?(max_bytes = 1_048_576) ~paths name =
   let lock = Mutex.create () in
   let path = State_paths.net_log paths name in
+  let previous = State_paths.net_log_previous paths name in
   fun event ->
-    Mutex.protect lock (fun () -> ignore (append path (Egress.event_to_line event)))
+    Mutex.protect lock (fun () ->
+        (match Unix.stat path with
+         | { Unix.st_size; _ } when st_size >= max_bytes -> Sys.rename path previous
+         | _ | (exception Unix.Unix_error _) -> ());
+        ignore (append path (Egress.event_to_line event)))
 
 type classify =
   target:Egress.target -> allowed:string list -> recent:string list -> Egress.verdict * string
