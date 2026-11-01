@@ -43,6 +43,10 @@ val net_dir : t -> Workbench_name.t -> string
 val net_log : t -> Workbench_name.t -> string
 (** The egress proxy's decisions and classifications, one JSON object a line. *)
 
+val net_log_previous : t -> Workbench_name.t -> string
+(** Where {!net_log} moves when it reaches its size limit, replacing the
+    previous one. *)
+
 val session_allow_file : t -> Workbench_name.t -> string
 (** Hosts allowed with [ade net allow] until the workbench next starts. *)
 

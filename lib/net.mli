@@ -46,6 +46,11 @@ val decider :
     recorded as an exact [host:port] in the session's auto-allowed list.
     Without a classifier everything is refused for the user. *)
 
+val recorder : ?max_bytes:int -> paths:State_paths.t -> Workbench_name.t -> Egress.event -> unit
+(** Append an event to the workbench's log. A log of [max_bytes] (1 MiB) or
+    more first moves to {!State_paths.net_log_previous}, so the newest events
+    are kept and the total stays bounded. *)
+
 val pending : paths:State_paths.t -> Declaration.t -> (Egress.pending list, Ade_error.t) result
 val log : paths:State_paths.t -> Declaration.t -> (Egress.event list, Ade_error.t) result
 
