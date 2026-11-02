@@ -304,6 +304,10 @@ ade net allow work registry.yarnpkg.com      # until the workbench next starts
 ade net allow work registry.yarnpkg.com --always   # appended to work.allow
 ```
 
+`ade net log` and `ade net pending` read the proxy's log, which is bounded:
+at 1 MiB it moves to `log.1`, replacing the one before, so about the last
+2 MiB of decisions are kept.
+
 A refused host that needs you also raises a desktop notification
 (`notify-send` on Linux, `osascript` on macOS), once per host until the
 workbench next starts, with the `ade net allow` line to run. A host the
