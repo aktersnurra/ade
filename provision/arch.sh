@@ -33,11 +33,6 @@ EOF
 grep -qxF '. /etc/profile.d/ade-claude.sh' /etc/bash.bashrc 2>/dev/null \
   || echo '. /etc/profile.d/ade-claude.sh' >> /etc/bash.bashrc
 
-# Clone mounts under /src belong to the host user, not to guest root, so git
-# refuses to clone them as "dubious ownership". They are the user's own
-# repositories, mounted read-only.
-git config --system --replace-all safe.directory '/src/*' '^/src/\*$'
-
 # Credentials live only in tmpfs under /run/ade/secrets and are installed by
 # ADE at every start; nothing below holds one, it only says where to look.
 #
